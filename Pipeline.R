@@ -170,6 +170,74 @@ cat(sprintf(
   length(samples_to_keep)
 ))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 4.7 — FILTER LOW-ABUNDANCE / LOW-PREVALENCE FEATURES
+#            Keep species/KOs with ≥ 0.01% rel. abundance in ≥ 10% of samples
+# ─────────────────────────────────────────────────────────────────────────────
+
+min_rel_abund  <- 0.0001   # 0.01% relative abundance
+min_prevalence <- 0.10     # present in at least 10% of samples
+
+# ── Taxonomic filtering ───────────────────────────────────────────────────────
+
+# Step 1: extract count matrix only (no taxonomy columns)
+tax_count_mat <- tax_counts_final_qc %>%
+  select(-all_of(tax_cols)) %>%
+  as.matrix()
+
+# Step 2: per-sample relative abundance (column-wise proportions)
+tax_rel_mat <- sweep(tax_count_mat, 2, colSums(tax_count_mat), "/")
+
+# Step 3: for each species (row), fraction of samples exceeding threshold
+tax_prevalence <- rowMeans(tax_rel_mat >= min_rel_abund, na.rm = TRUE)
+
+# Step 4: flag which rows pass
+tax_rows_pass <- tax_prevalence >= min_prevalence
+
+# Step 5: apply filter, keeping taxonomy columns
+tax_counts_final_qc <- tax_counts_final_qc[tax_rows_pass, ]
+
+cat(sprintf(
+  "\n[TAX] Species before prevalence filter: %d | After: %d | Removed: %d\n",
+  length(tax_rows_pass),
+  sum(tax_rows_pass),
+  sum(!tax_rows_pass)
+))
+
+# ── KO filtering ──────────────────────────────────────────────────────────────
+
+# Step 1: extract count matrix only (no ko column)
+ko_count_mat <- ko_counts_final_qc %>%
+  select(-ko) %>%
+  as.matrix()
+
+# Step 2: per-sample relative abundance
+ko_rel_mat <- sweep(ko_count_mat, 2, colSums(ko_count_mat), "/")
+
+# Step 3: fraction of samples exceeding threshold per KO
+ko_prevalence <- rowMeans(ko_rel_mat >= min_rel_abund, na.rm = TRUE)
+
+# Step 4: flag passing rows
+ko_rows_pass <- ko_prevalence >= min_prevalence
+
+# Step 5: apply filter, keeping ko column
+ko_counts_final_qc <- ko_counts_final_qc[ko_rows_pass, ]
+
+cat(sprintf(
+  "[KO]  Features before prevalence filter: %d | After: %d | Removed: %d\n",
+  length(ko_rows_pass),
+  sum(ko_rows_pass),
+  sum(!ko_rows_pass)
+))
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+cat(sprintf(
+  "\nFilter thresholds: ≥ %.2f%% relative abundance in ≥ %.0f%% of samples\n",
+  min_rel_abund * 100,
+  min_prevalence * 100
+))
+
 #-----------------------------------------------------------------------
 #PCA
 # ─────────────────────────────────────────────────────────────────────────────
@@ -454,7 +522,7 @@ p_compare <- (p_pca_12 + labs(title = "Taxonomic PCA")) +
 
 print(p_compare)
 
-#---------------------------------------------
+
 
 
 
