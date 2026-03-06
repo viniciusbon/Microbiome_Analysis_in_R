@@ -303,9 +303,185 @@ p_scree <- ggplot(scree_df[1:15, ], aes(x = PC, y = Var_Pct)) +
 
 print(p_scree)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 6 — PCA (KO-BASED): CROSS-VALIDATION OF SAMPLE SWAP CHECK
+# ─────────────────────────────────────────────────────────────────────────────
 
-#------------------------------------------------
-#-----------------------------------------
+# 6.1  Prepare KO count matrix ─────────────────────────────────────────────────
+
+ko_matrix <- ko_counts_final_qc %>%
+  filter(!is.na(ko), ko != "") %>%           # remove rows with missing KO IDs
+  column_to_rownames("ko") %>%               # set KO IDs as row names
+  filter(rowSums(.) > 0)                     # remove all-zero rows
+
+# Transpose → samples as rows, KOs as columns
+ko_matrix_t <- t(ko_matrix)
+
+# 6.2  CLR transformation ──────────────────────────────────────────────────────
+
+ko_clr <- ko_matrix_t + 0.5                                       # pseudocount
+ko_clr <- sweep(ko_clr, 1, rowSums(ko_clr), "/")                 # relative abundances
+ko_clr <- log(ko_clr) - rowMeans(log(ko_clr))                    # CLR
+
+# 6.3  Run PCA ─────────────────────────────────────────────────────────────────
+
+pca_ko_result <- prcomp(ko_clr, center = TRUE, scale. = FALSE)
+var_exp_ko    <- summary(pca_ko_result)$importance[2, ] * 100    # % variance explained
+
+# 6.4  Build plotting data frame ───────────────────────────────────────────────
+
+pca_ko_df <- as.data.frame(pca_ko_result$x[, 1:3]) %>%
+  rownames_to_column("Sample_ID_FM_Pipeline") %>%
+  left_join(
+    metadata_final_qc %>% select(Sample_ID_FM_Pipeline, Group),
+    by = "Sample_ID_FM_Pipeline"
+  )
+
+# 6.5  PC1 vs PC2 ──────────────────────────────────────────────────────────────
+
+p_pca_ko_12 <- ggplot(pca_ko_df,
+                      aes(x = PC1, y = PC2,
+                          color = Group,
+                          label = Sample_ID_FM_Pipeline)) +
+  geom_point(size = 3.5, alpha = 0.85) +
+  geom_text_repel(
+    size          = 3,
+    max.overlaps  = 30,
+    show.legend   = FALSE,
+    segment.color = "grey60"
+  ) +
+  stat_ellipse(
+    aes(group = Group),
+    type      = "norm",
+    linetype  = "dashed",
+    alpha     = 0.5,
+    linewidth = 0.7
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title    = "PCA — KO-Based Sample Swap Check (PC1 vs PC2)",
+    subtitle = "KEGG Orthology counts · CLR transformation",
+    x        = sprintf("PC1 (%.1f%%)", var_exp_ko[1]),
+    y        = sprintf("PC2 (%.1f%%)", var_exp_ko[2]),
+    color    = "Group"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    legend.position = "right"
+  )
+
+print(p_pca_ko_12)
+
+# 6.6  PC1 vs PC3 ──────────────────────────────────────────────────────────────
+
+p_pca_ko_13 <- ggplot(pca_ko_df,
+                      aes(x = PC1, y = PC3,
+                          color = Group,
+                          label = Sample_ID_FM_Pipeline)) +
+  geom_point(size = 3.5, alpha = 0.85) +
+  geom_text_repel(
+    size          = 3,
+    max.overlaps  = 30,
+    show.legend   = FALSE,
+    segment.color = "grey60"
+  ) +
+  stat_ellipse(
+    aes(group = Group),
+    type      = "norm",
+    linetype  = "dashed",
+    alpha     = 0.5,
+    linewidth = 0.7
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title    = "PCA — KO-Based Sample Swap Check (PC1 vs PC3)",
+    subtitle = "KEGG Orthology counts · CLR transformation",
+    x        = sprintf("PC1 (%.1f%%)", var_exp_ko[1]),
+    y        = sprintf("PC3 (%.1f%%)", var_exp_ko[3]),
+    color    = "Group"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    legend.position = "right"
+  )
+
+print(p_pca_ko_13)
+
+# 6.7  Scree plot ──────────────────────────────────────────────────────────────
+
+scree_ko_df <- data.frame(
+  PC      = seq_along(var_exp_ko),
+  Var_Pct = var_exp_ko
+)
+
+p_scree_ko <- ggplot(scree_ko_df[1:15, ], aes(x = PC, y = Var_Pct)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_line(color = "darkred", linewidth = 0.8) +
+  geom_point(color = "darkred", size = 2) +
+  labs(
+    title = "Scree Plot — KO PCA Variance Explained per PC",
+    x     = "Principal Component",
+    y     = "Variance Explained (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+
+print(p_scree_ko)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.8  SIDE-BY-SIDE COMPARISON — Taxonomic vs KO (PC1 vs PC2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+library(patchwork)
+
+# Add a source label to each PCA data frame
+pca_combined <- bind_rows(
+  pca_df    %>% mutate(Source = "Taxonomic (Species)"),
+  pca_ko_df %>% mutate(Source = "Functional (KO)")
+)
+
+# Normalise PC axes direction isn't guaranteed between runs,
+# so plot them separately but display together with patchwork
+
+p_compare <- (p_pca_12 + labs(title = "Taxonomic PCA")) +
+  (p_pca_ko_12 + labs(title = "Functional (KO) PCA")) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+print(p_compare)
+
+#---------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
