@@ -869,3 +869,189 @@ alpha_summary <- alpha_long %>%
 cat("\n══ Descriptive Statistics per Group ════════════════════════════════════\n")
 print(alpha_summary, n = Inf)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#------------------------------------------ BETA -----------------------------
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 8 — BETA DIVERSITY: ORDINATIONS, STATS & HEATMAP
+# ─────────────────────────────────────────────────────────────────────────────
+
+library(ape)
+library(vegan)
+library(ComplexHeatmap)
+library(circlize)
+
+cat("\n==========================================================\n")
+cat("BETA DIVERSITY ANALYSIS\n")
+cat("==========================================================\n")
+
+# 8.1  Prepare Phylogenetic Tree (Required for UniFrac) ────────────────────────
+
+# NOTE: UniFrac requires a phylogenetic tree. Since the input data doesn't have one,
+# we generate a random tree here SOLELY so the UniFrac function can execute.
+# For real biological conclusions using UniFrac, please import your actual .tre file.
+if (is.null(phy_tree(ps_rare, errorIfNULL = FALSE))) {
+  cat("\n[WARNING] No phylogenetic tree found. Generating a random tree for UniFrac demonstration.\n")
+  set.seed(123)
+  mock_tree <- rtree(ntaxa(ps_rare), rooted = TRUE, tip.label = taxa_names(ps_rare))
+  ps_beta <- merge_phyloseq(ps_rare, mock_tree)
+} else {
+  ps_beta <- ps_rare
+}
+
+# 8.2  Calculate Distance Matrices ─────────────────────────────────────────────
+
+cat("Calculating distance matrices (Bray-Curtis, Jaccard, Weighted UniFrac)...\n")
+dist_bray <- phyloseq::distance(ps_beta, method = "bray")
+dist_jacc <- phyloseq::distance(ps_beta, method = "jaccard", binary = TRUE)
+dist_wuni <- phyloseq::distance(ps_beta, method = "wunifrac")
+
+# Extract metadata for statistical testing
+meta_beta <- as(sample_data(ps_beta), "data.frame")
+
+# 8.3  Statistical Tests (PERMANOVA & ANOSIM) ──────────────────────────────────
+
+run_beta_stats <- function(dist_mat, dist_name) {
+  # PERMANOVA (adonis2)
+  perm_res <- adonis2(dist_mat ~ Group, data = meta_beta, permutations = 999)
+  p_perm   <- perm_res$`Pr(>F)`[1]
+  r2_perm  <- perm_res$R2[1]
+  
+  # ANOSIM
+  anosim_res <- anosim(dist_mat, meta_beta$Group, permutations = 999)
+  p_anosim   <- anosim_res$signif
+  r_anosim   <- anosim_res$statistic
+  
+  cat(sprintf("\n--- %s Distance ---\n", dist_name))
+  cat(sprintf("PERMANOVA : R2 = %.4f | p-value = %.4f\n", r2_perm, p_perm))
+  cat(sprintf("ANOSIM    : R  = %.4f | p-value = %.4f\n", r_anosim, p_anosim))
+  
+  return(list(p_perm = p_perm, r2_perm = r2_perm))
+}
+
+cat("\n══ Beta Diversity Statistical Tests ════════════════════════════════════\n")
+stats_bray <- run_beta_stats(dist_bray, "Bray-Curtis")
+stats_jacc <- run_beta_stats(dist_jacc, "Jaccard")
+stats_wuni <- run_beta_stats(dist_wuni, "Weighted UniFrac")
+
+# 8.4  Ordinations (PCoA & NMDS) ───────────────────────────────────────────────
+
+# Function to create ordination plot
+plot_ordination_custom <- function(ps_obj, dist_mat, ord_method, dist_name, stats) {
+  
+  ord <- ordinate(ps_obj, method = ord_method, distance = dist_mat)
+  
+  p <- plot_ordination(ps_obj, ord, color = "Group") +
+    geom_point(size = 3.5, alpha = 0.85) +
+    stat_ellipse(type = "t", linetype = "dashed", alpha = 0.7, linewidth = 0.8) +
+    scale_color_manual(values = group_colors) +
+    labs(
+      title = sprintf("%s (%s)", ord_method, dist_name),
+      subtitle = sprintf("PERMANOVA: p = %.3f, R² = %.3f", stats$p_perm, stats$r2_perm)
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+  return(p)
+}
+
+p_pcoa_bray <- plot_ordination_custom(ps_beta, dist_bray, "PCoA", "Bray-Curtis", stats_bray)
+p_nmds_bray <- plot_ordination_custom(ps_beta, dist_bray, "NMDS", "Bray-Curtis", stats_bray)
+p_pcoa_wuni <- plot_ordination_custom(ps_beta, dist_wuni, "PCoA", "Weighted UniFrac", stats_wuni)
+
+# Display ordination plots using patchwork
+p_beta_panel <- (p_pcoa_bray | p_nmds_bray | p_pcoa_wuni) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+print(p_beta_panel)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.5  COMPLEXHEATMAP: Top Abundant Taxa
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\nGenerating ComplexHeatmap for top 40 taxa...\n")
+
+# Transform counts to relative abundance
+ps_rel <- transform_sample_counts(ps_beta, function(x) x / sum(x))
+
+# Get the top 40 most abundant taxa across all samples
+top40_taxa <- names(sort(taxa_sums(ps_rel), decreasing = TRUE))[1:40]
+ps_top40   <- prune_taxa(top40_taxa, ps_rel)
+
+# Extract OTU table as matrix
+heat_mat <- as(otu_table(ps_top40), "matrix")
+
+# Ensure taxa are rows and samples are columns
+if (!taxa_are_rows(ps_top40)) {
+  heat_mat <- t(heat_mat)
+}
+
+# Simplify rownames (just keep species name instead of the whole string)
+clean_rownames <- sapply(strsplit(rownames(heat_mat), "\\|"), tail, 1)
+rownames(heat_mat) <- clean_rownames
+
+# Apply Z-score transformation row-wise (to highlight variance across samples)
+heat_mat_z <- t(scale(t(heat_mat)))
+
+# Ensure column names in matrix match metadata precisely
+heat_mat_z <- heat_mat_z[, rownames(meta_beta)]
+
+# Create Column Annotation for Group
+col_ha <- HeatmapAnnotation(
+  Group = meta_beta$Group,
+  col   = list(Group = group_colors),
+  annotation_name_side = "left"
+)
+
+# Build Heatmap
+ht <- Heatmap(
+  heat_mat_z,
+  name              = "Z-Score\n(Rel. Abund)",
+  top_annotation    = col_ha,
+  show_row_names    = TRUE,
+  show_column_names = FALSE,       # Hide sample names to avoid clutter
+  row_names_gp      = gpar(fontsize = 9, fontface = "italic"),
+  column_title      = "Top 40 Most Abundant Species",
+  clustering_distance_columns = "euclidean",
+  clustering_method_columns   = "ward.D2",
+  clustering_distance_rows    = "pearson",
+  row_dend_width    = unit(15, "mm")
+)
+
+# Draw Heatmap
+draw(ht, merge_legend = TRUE)
+
+cat("✔ Beta Diversity analysis and plotting complete.\n")
