@@ -523,40 +523,349 @@ p_compare <- (p_pca_12 + labs(title = "Taxonomic PCA")) +
 print(p_compare)
 
 
+# ------------------------------------------------- Alpha --------------
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 7 — ALPHA DIVERSITY: RAREFACTION + METRICS + PLOTS + STATS
+# ─────────────────────────────────────────────────────────────────────────────
 
+# 7.1  Build phyloseq object (species-level) ───────────────────────────────────
 
+sample_cols_tax <- setdiff(colnames(tax_counts_final_qc), tax_cols)
 
+species_df_alpha <- tax_counts_final_qc %>%
+  filter(!is.na(s), s != "") %>%
+  mutate(tax_id = make.unique(paste(g, s, sep = "|")))
 
+# OTU table — taxa × samples
+otu_mat_alpha <- species_df_alpha %>%
+  select(tax_id, all_of(sample_cols_tax)) %>%
+  column_to_rownames("tax_id") %>%
+  as.matrix()
 
+# Taxonomy table — taxa × ranks
+tax_mat_alpha <- species_df_alpha %>%
+  select(tax_id, all_of(tax_cols)) %>%
+  column_to_rownames("tax_id") %>%
+  as.matrix()
 
+# Sample metadata
+samp_df_alpha <- metadata_final_qc %>%
+  column_to_rownames("Sample_ID_FM_Pipeline") %>%
+  as.data.frame()
 
+# Assemble phyloseq
+ps_alpha <- phyloseq(
+  otu_table(otu_mat_alpha, taxa_are_rows = TRUE),
+  tax_table(tax_mat_alpha),
+  sample_data(samp_df_alpha)
+)
 
+cat(sprintf("\nPhyloseq built: %d taxa × %d samples\n",
+            ntaxa(ps_alpha), nsamples(ps_alpha)))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.2  Sequencing depth check — before rarefaction
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: phyloseq applies make.names() to numeric sample IDs
+#       (e.g. "12345" → "X12345") — fix_id() reverses this before joining
 
+depth_df <- data.frame(
+  Sample_ID_FM_Pipeline = fix_id(sample_names(ps_alpha)),
+  Depth                 = sample_sums(ps_alpha)
+) %>%
+  left_join(
+    metadata_final_qc %>% select(Sample_ID_FM_Pipeline, Group),
+    by = "Sample_ID_FM_Pipeline"
+  ) %>%
+  arrange(Depth)
 
+# Validate join
+if (any(is.na(depth_df$Group))) {
+  warning("Depth join failed for some samples — check sample IDs!")
+  print(depth_df %>% filter(is.na(Group)))
+} else {
+  cat("✔ Depth join OK — all samples matched to metadata\n")
+}
 
+rare_depth <- min(depth_df$Depth)
 
+cat(sprintf(
+  "Rarefaction depth (minimum): %d  |  Max: %d  |  Median: %.0f\n",
+  rare_depth, max(depth_df$Depth), median(depth_df$Depth)
+))
 
+p_depth <- ggplot(depth_df,
+                  aes(x = reorder(Sample_ID_FM_Pipeline, Depth),
+                      y = Depth,
+                      fill = Group)) +
+  geom_col(alpha = 0.85) +
+  geom_hline(yintercept = rare_depth,
+             color = "darkred", linetype = "dashed", linewidth = 0.8) +
+  annotate("text",
+           x     = 1,
+           y     = rare_depth,
+           label = sprintf("Rarefaction depth: %d", rare_depth),
+           vjust = -0.5, hjust = 0, color = "darkred", size = 3.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title    = "Sequencing Depth per Sample",
+    subtitle = "Red dashed line = rarefaction threshold (minimum depth)",
+    x        = "Sample",
+    y        = "Read Count",
+    fill     = "Group"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.text.x   = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
 
+print(p_depth)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.3  Rarefaction — phyloseq::rarefy_even_depth
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: rngseed = 42 used directly — cleaner than set.seed() + rngseed = FALSE
 
+ps_rare <- rarefy_even_depth(
+  ps_alpha,
+  sample.size = rare_depth,
+  rngseed     = 42,
+  replace     = FALSE,
+  trimOTUs    = TRUE,
+  verbose     = TRUE
+)
 
+cat(sprintf(
+  "\nAfter rarefaction: %d taxa × %d samples | Depth: %d reads/sample\n",
+  ntaxa(ps_rare), nsamples(ps_rare), rare_depth
+))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.4  Estimate alpha diversity metrics
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: fix_id() applied to rownames — phyloseq's make.names() adds "X" prefix
+#       to numeric IDs, which breaks the left_join with metadata if not reversed
 
+alpha_div <- estimate_richness(
+  ps_rare,
+  measures = c("Observed", "Chao1", "Shannon", "Simpson")
+) %>%
+  rownames_to_column("Sample_ID_FM_Pipeline") %>%
+  mutate(Sample_ID_FM_Pipeline = fix_id(Sample_ID_FM_Pipeline)) %>%
+  left_join(
+    metadata_final_qc %>% select(Sample_ID_FM_Pipeline, Group),
+    by = "Sample_ID_FM_Pipeline"
+  )
 
+# Validate join
+if (any(is.na(alpha_div$Group))) {
+  warning("Alpha div join failed — some samples missing Group assignment!")
+  print(alpha_div %>% filter(is.na(Group)) %>% select(Sample_ID_FM_Pipeline, Group))
+} else {
+  cat(sprintf("✔ Alpha diversity computed for %d samples across %d groups\n",
+              nrow(alpha_div), n_distinct(alpha_div$Group)))
+}
 
+# Long format for plotting
+alpha_long <- alpha_div %>%
+  select(Sample_ID_FM_Pipeline, Group, Observed, Chao1, Shannon, Simpson) %>%
+  pivot_longer(
+    cols      = c(Observed, Chao1, Shannon, Simpson),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(Metric = factor(Metric,
+                         levels = c("Observed", "Chao1", "Shannon", "Simpson")))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.5  Colour palette & comparison setup
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: 2 groups only — list() used directly instead of combn()
 
+groups_ordered   <- sort(unique(alpha_long$Group))
+group_colors     <- setNames(
+  RColorBrewer::brewer.pal(3, "Set1")[1:2],
+  groups_ordered
+)
+comparisons_list <- list(groups_ordered)   # single pair for 2 groups
 
+cat(sprintf("\nGroups: %s\n", paste(groups_ordered, collapse = " vs ")))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.6  Faceted violin + boxplot — all 4 metrics
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: stat_compare_means(kruskal.test) REMOVED — redundant for 2 groups
+#       (K-W equals Wilcoxon) and causes label misplacement in free_y facets
 
+p_alpha_all <- ggplot(alpha_long,
+                      aes(x     = Group,
+                          y     = Value,
+                          fill  = Group,
+                          color = Group)) +
+  geom_violin(alpha = 0.35, linewidth = 0.6, trim = FALSE) +
+  geom_boxplot(width         = 0.18,
+               alpha         = 0.80,
+               outlier.shape = NA,
+               color         = "black") +
+  geom_jitter(width = 0.08, size = 1.8, alpha = 0.70, show.legend = FALSE) +
+  stat_compare_means(
+    method       = "wilcox.test",
+    comparisons  = comparisons_list,
+    label        = "p.format",
+    tip.length   = 0.01,
+    bracket.size = 0.4,
+    size         = 3.8
+  ) +
+  scale_fill_manual(values  = group_colors) +
+  scale_color_manual(values = group_colors) +
+  facet_wrap(~ Metric, scales = "free_y", nrow = 2) +
+  labs(
+    title    = "Alpha Diversity — Rarefied Data",
+    subtitle = sprintf(
+      "Rarefied to %d reads/sample  ·  Wilcoxon rank-sum p-value shown",
+      rare_depth),
+    x     = NULL,
+    y     = "Diversity Value",
+    fill  = "Group",
+    color = "Group"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold"),
+    plot.subtitle    = element_text(color = "grey40", size = 9.5),
+    strip.text       = element_text(face = "bold", size = 12),
+    strip.background = element_rect(fill = "grey92", color = NA),
+    legend.position  = "bottom",
+    axis.text.x      = element_text(angle = 20, hjust = 1)
+  )
 
+print(p_alpha_all)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.7  Individual metric plots — 2×2 publication panel
+# ─────────────────────────────────────────────────────────────────────────────
 
+plot_alpha_metric <- function(metric_name, y_label) {
+  
+  dat <- alpha_long %>% filter(Metric == metric_name)
+  
+  ggplot(dat, aes(x = Group, y = Value, fill = Group, color = Group)) +
+    geom_violin(alpha = 0.30, linewidth = 0.6, trim = FALSE) +
+    geom_boxplot(width         = 0.20,
+                 alpha         = 0.80,
+                 outlier.shape = NA,
+                 color         = "black") +
+    geom_jitter(width = 0.08, size = 2.2, alpha = 0.75, show.legend = FALSE) +
+    stat_compare_means(
+      method      = "wilcox.test",
+      comparisons = comparisons_list,
+      label       = "p.format",
+      tip.length  = 0.01,
+      size        = 3.8
+    ) +
+    scale_fill_manual(values  = group_colors) +
+    scale_color_manual(values = group_colors) +
+    labs(title = metric_name, x = NULL, y = y_label) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title      = element_text(face = "bold", hjust = 0.5),
+      legend.position = "none",
+      axis.text.x     = element_text(angle = 20, hjust = 1)
+    )
+}
 
+p_observed <- plot_alpha_metric("Observed", "Observed Species (Richness)")
+p_chao1    <- plot_alpha_metric("Chao1",    "Chao1 Estimated Richness")
+p_shannon  <- plot_alpha_metric("Shannon",  "Shannon Diversity Index")
+p_simpson  <- plot_alpha_metric("Simpson",  "Simpson Diversity Index")
 
+p_alpha_panel <- (p_observed | p_chao1) / (p_shannon | p_simpson) +
+  plot_annotation(
+    title    = "Alpha Diversity — Individual Metrics",
+    subtitle = sprintf("Rarefied to %d reads/sample · Wilcoxon p-value shown",
+                       rare_depth),
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
+  )
 
+print(p_alpha_panel)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.8  Statistical tests — full results tables
+# ─────────────────────────────────────────────────────────────────────────────
 
+metrics_list <- c("Observed", "Chao1", "Shannon", "Simpson")
+grp_a        <- groups_ordered[1]
+grp_b        <- groups_ordered[2]
 
+# ── Kruskal-Wallis ─────────────────────────────────────────────────────────────
+
+kw_results <- map_dfr(metrics_list, function(m) {
+  dat  <- alpha_div %>% filter(!is.na(.data[[m]]))
+  test <- kruskal.test(reformulate("Group", response = m), data = dat)
+  tibble(
+    Metric    = m,
+    Test      = "Kruskal-Wallis",
+    Statistic = round(test$statistic, 4),
+    df        = test$parameter,
+    p_value   = round(test$p.value, 4),
+    Sig       = case_when(
+      test$p.value < 0.001 ~ "***",
+      test$p.value < 0.01  ~ "**",
+      test$p.value < 0.05  ~ "*",
+      TRUE                 ~ "ns"
+    )
+  )
+})
+
+# ── Wilcoxon rank-sum ──────────────────────────────────────────────────────────
+# NOTE: wilcox.test() used directly — cleaner for 2 groups, returns W statistic
+# NOTE: exact = FALSE required — microbiome data always has ties
+
+wx_results <- map_dfr(metrics_list, function(m) {
+  dat    <- alpha_div %>% filter(!is.na(.data[[m]]))
+  vals_a <- dat %>% filter(Group == grp_a) %>% pull(.data[[m]])
+  vals_b <- dat %>% filter(Group == grp_b) %>% pull(.data[[m]])
+  test   <- wilcox.test(vals_a, vals_b, exact = FALSE)
+  tibble(
+    Metric     = m,
+    Test       = "Wilcoxon rank-sum",
+    Comparison = paste(grp_a, "vs", grp_b),
+    W          = round(test$statistic, 4),
+    p_value    = round(test$p.value, 4),
+    Sig        = case_when(
+      test$p.value < 0.001 ~ "***",
+      test$p.value < 0.01  ~ "**",
+      test$p.value < 0.05  ~ "*",
+      TRUE                 ~ "ns"
+    )
+  )
+})
+
+cat("\n══ Kruskal-Wallis Results (note: equivalent to Wilcoxon for 2 groups) ══\n")
+print(kw_results, n = Inf)
+
+cat("\n══ Wilcoxon Rank-Sum Results ════════════════════════════════════════════\n")
+print(wx_results, n = Inf)
+
+# ── Descriptive statistics per group ──────────────────────────────────────────
+
+alpha_summary <- alpha_long %>%
+  group_by(Group, Metric) %>%
+  summarise(
+    N      = n(),
+    Mean   = round(mean(Value,   na.rm = TRUE), 4),
+    Median = round(median(Value, na.rm = TRUE), 4),
+    SD     = round(sd(Value,     na.rm = TRUE), 4),
+    Min    = round(min(Value,    na.rm = TRUE), 4),
+    Max    = round(max(Value,    na.rm = TRUE), 4),
+    .groups = "drop"
+  )
+
+cat("\n══ Descriptive Statistics per Group ════════════════════════════════════\n")
+print(alpha_summary, n = Inf)
 
