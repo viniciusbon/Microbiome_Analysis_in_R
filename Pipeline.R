@@ -397,6 +397,222 @@ p_scree <- ggplot(scree_df[1:15, ], aes(x = PC, y = Var_Pct)) +
 print(p_scree)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5.8  Biplot — samples + species loadings
+# ─────────────────────────────────────────────────────────────────────────────
+
+n_arrows <- 15   # number of top-contributing species to display as arrows
+
+# Retrieve species names matching pca_matrix row order
+# NOTE: must apply identical filters as in 5.1 to guarantee row alignment
+species_labels_biplot <- tax_counts_final_qc %>%
+  filter(!is.na(s)) %>%
+  mutate(count_sum = rowSums(select(., -all_of(tax_cols)))) %>%
+  filter(count_sum > 0) %>%
+  mutate(species_label = make.unique(paste(g, s, sep = "|"))) %>%
+  pull(species_label)
+
+# Assign species names as rownames of the loading matrix
+rownames(pca_result$rotation) <- species_labels_biplot
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.1  Helper — build scaled loadings data frame for any pair of PCs
+# ─────────────────────────────────────────────────────────────────────────────
+
+get_scaled_loadings <- function(rotation, scores_df,
+                                pc_x, pc_y,
+                                n_top, scale_pct = 0.65) {
+  
+  load_df <- as.data.frame(rotation[, c(pc_x, pc_y)]) %>%
+    setNames(c("PCx", "PCy")) %>%
+    rownames_to_column("species") %>%
+    mutate(
+      species_short = sub("^[^|]*\\|", "", species),   # keep part after "|"
+      loading_mag   = sqrt(PCx^2 + PCy^2)
+    ) %>%
+    arrange(desc(loading_mag)) %>%
+    head(n_top)
+  
+  # Scale so arrows reach scale_pct of the sample-score range
+  score_range   <- max(abs(scores_df[, c(pc_x, pc_y)]))
+  loading_range <- max(abs(load_df[, c("PCx", "PCy")]))
+  sf            <- score_range / loading_range * scale_pct
+  
+  load_df %>%
+    mutate(PCx_sc = PCx * sf,
+           PCy_sc = PCy * sf)
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.2  Helper — build biplot ggplot
+# ─────────────────────────────────────────────────────────────────────────────
+
+make_biplot <- function(scores_df, loadings_scaled,
+                        pc_x_col, pc_y_col,
+                        x_label, y_label,
+                        title, subtitle) {
+  
+  ggplot() +
+    # ── Sample points ──────────────────────────────────────────────────────
+    geom_point(
+      data  = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], color = Group),
+      size  = 3.2, alpha = 0.82
+    ) +
+    geom_text_repel(
+      data          = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]],
+          color = Group, label = Sample_ID_FM_Pipeline),
+      size          = 2.6,
+      max.overlaps  = 20,
+      show.legend   = FALSE,
+      segment.color = "grey60",
+      segment.size  = 0.3
+    ) +
+    # ── Confidence ellipses ────────────────────────────────────────────────
+    stat_ellipse(
+      data      = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]],
+          group = Group, color = Group),
+      type      = "norm",
+      linetype  = "dashed",
+      alpha     = 0.5,
+      linewidth = 0.7
+    ) +
+    # ── Loading arrows ─────────────────────────────────────────────────────
+    geom_segment(
+      data      = loadings_scaled,
+      aes(x = 0, y = 0, xend = PCx_sc, yend = PCy_sc),
+      arrow     = arrow(length = unit(0.22, "cm"), type = "closed"),
+      color     = "grey20",
+      linewidth = 0.45,
+      alpha     = 0.80
+    ) +
+    # ── Arrow labels ───────────────────────────────────────────────────────
+    geom_text_repel(
+      data          = loadings_scaled,
+      aes(x = PCx_sc, y = PCy_sc, label = species_short),
+      size          = 2.5,
+      color         = "grey10",
+      fontface      = "italic",
+      max.overlaps  = 40,
+      segment.color = "grey65",
+      segment.size  = 0.25,
+      box.padding   = 0.35,
+      force         = 1.5
+    ) +
+    scale_color_brewer(palette = "Set1") +
+    labs(
+      title    = title,
+      subtitle = subtitle,
+      x        = x_label,
+      y        = y_label,
+      color    = "Group"
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title      = element_text(face = "bold"),
+      plot.subtitle   = element_text(color = "grey40", size = 10),
+      legend.position = "right"
+    )
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.3  Biplot — PC1 vs PC2
+# ─────────────────────────────────────────────────────────────────────────────
+
+load_scaled_12 <- get_scaled_loadings(
+  rotation  = pca_result$rotation,
+  scores_df = pca_df,
+  pc_x      = "PC1",
+  pc_y      = "PC2",
+  n_top     = n_arrows
+)
+
+p_biplot_12 <- make_biplot(
+  scores_df       = pca_df,
+  loadings_scaled = load_scaled_12,
+  pc_x_col        = "PC1",
+  pc_y_col        = "PC2",
+  x_label         = sprintf("PC1 (%.1f%%)", var_exp[1]),
+  y_label         = sprintf("PC2 (%.1f%%)", var_exp[2]),
+  title           = "PCA Biplot — PC1 vs PC2",
+  subtitle        = sprintf(
+    "Species-level · CLR transformation · Top %d species loadings",
+    n_arrows
+  )
+)
+
+print(p_biplot_12)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.4  Biplot — PC1 vs PC3
+# ─────────────────────────────────────────────────────────────────────────────
+
+load_scaled_13 <- get_scaled_loadings(
+  rotation  = pca_result$rotation,
+  scores_df = pca_df,
+  pc_x      = "PC1",
+  pc_y      = "PC3",
+  n_top     = n_arrows
+)
+
+p_biplot_13 <- make_biplot(
+  scores_df       = pca_df,
+  loadings_scaled = load_scaled_13,
+  pc_x_col        = "PC1",
+  pc_y_col        = "PC3",
+  x_label         = sprintf("PC1 (%.1f%%)", var_exp[1]),
+  y_label         = sprintf("PC3 (%.1f%%)", var_exp[3]),
+  title           = "PCA Biplot — PC1 vs PC3",
+  subtitle        = sprintf(
+    "Species-level · CLR transformation · Top %d species loadings",
+    n_arrows
+  )
+)
+
+print(p_biplot_13)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.5  Combined biplot panel
+# ─────────────────────────────────────────────────────────────────────────────
+
+p_biplot_panel <- (p_biplot_12 | p_biplot_13) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title    = "PCA Biplots — Sample Scores & Species Loadings",
+    subtitle = sprintf(
+      "Arrows = top %d species by PC loading magnitude  ·  CLR-transformed counts",
+      n_arrows
+    ),
+    theme = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+print(p_biplot_panel)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.6  Top loadings table — printed for reference
+# ─────────────────────────────────────────────────────────────────────────────
+
+loadings_table <- as.data.frame(pca_result$rotation[, 1:3]) %>%
+  rownames_to_column("species") %>%
+  mutate(
+    species_short = sub("^[^|]*\\|", "", species),
+    mag_PC1_PC2   = round(sqrt(PC1^2 + PC2^2), 4),
+    PC1           = round(PC1, 4),
+    PC2           = round(PC2, 4),
+    PC3           = round(PC3, 4)
+  ) %>%
+  arrange(desc(mag_PC1_PC2)) %>%
+  select(species_short, PC1, PC2, PC3, mag_PC1_PC2)
+
+cat(sprintf("\n══ Top %d Species Loadings (PC1–PC3) ═══════════════════════════════\n",
+            n_arrows))
+print(head(loadings_table, n_arrows), row.names = FALSE)
+# ─────────────────────────────────────────────────────────────────────────────
 # PART 6 — PCA (KO-BASED): CROSS-VALIDATION OF SAMPLE SWAP CHECK
 # ─────────────────────────────────────────────────────────────────────────────
 
