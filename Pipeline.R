@@ -42,7 +42,7 @@ for (pkg in cran_packages) {
     install.packages(pkg)
   }
 }
-
+install.packages("openxlsx")
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 1 — LIBRARIES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,7 +62,7 @@ library(RColorBrewer)
 library(ComplexHeatmap)
 library(circlize)
 library(ape)
-
+library(openxlsx)
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 2 — DATA READING AND ID STANDARDIZATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1910,3 +1910,364 @@ cat(sprintf("  Significant (q < 0.05)  : %d\n",  n_sig_05))
 cat(sprintf("  Enriched in %-27s: %d\n", comparison_group, n_enr_comp))
 cat(sprintf("  Enriched in %-27s: %d\n", ref_group,        n_enr_ref))
 cat(sprintf("  Output directory        : %s/\n",  maaslin_output_dir))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 10 — EXPORT: PLOTS (PNG) + FORMATTED STATISTICAL TABLES (XLSX)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.1  Create output directory structure
+# ─────────────────────────────────────────────────────────────────────────────
+
+output_root <- "microbiome_results"
+
+export_dirs <- c(
+  file.path(output_root, "plots", "01_QC"),
+  file.path(output_root, "plots", "02_PCA"),
+  file.path(output_root, "plots", "03_Alpha_Diversity"),
+  file.path(output_root, "plots", "04_Beta_Diversity"),
+  file.path(output_root, "plots", "05_Differential_Abundance"),
+  file.path(output_root, "tables")
+)
+
+for (d in export_dirs) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+
+cat(sprintf("✔ Output directories created under: %s/\n", output_root))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.2  Helper functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Save ggplot as PNG only
+save_gg <- function(plot_obj, filepath, width = 10, height = 7, dpi = 300) {
+  ggsave(paste0(filepath, ".png"),
+         plot   = plot_obj,
+         width  = width,
+         height = height,
+         dpi    = dpi,
+         bg     = "white")
+  cat(sprintf("  ✔ %s.png  [%.0f×%.0f in, %d dpi]\n",
+              basename(filepath), width, height, dpi))
+}
+
+# Save ComplexHeatmap as PNG only (requires base graphics device)
+save_ht <- function(ht_obj, filepath, width = 14, height = 11, dpi = 300) {
+  png(paste0(filepath, ".png"),
+      width  = width,
+      height = height,
+      units  = "in",
+      res    = dpi,
+      bg     = "white")
+  draw(ht_obj, merge_legend = TRUE)
+  dev.off()
+  cat(sprintf("  ✔ %s.png  [%.0f×%.0f in, %d dpi]\n",
+              basename(filepath), width, height, dpi))
+}
+
+# Add a formatted sheet to an openxlsx workbook
+add_fmt_sheet <- function(wb, sheet_name, data, hdr_color = "#4472C4") {
+  
+  addWorksheet(wb, sheetName = sheet_name)
+  
+  # Header style
+  hdr_style <- createStyle(
+    fontColour     = "#FFFFFF",
+    fgFill         = hdr_color,
+    fontName       = "Calibri",
+    fontSize       = 11,
+    textDecoration = "bold",
+    halign         = "center",
+    valign         = "center",
+    border         = "TopBottomLeftRight",
+    borderColour   = "#FFFFFF",
+    wrapText       = TRUE
+  )
+  # Body style
+  body_style <- createStyle(
+    fontName     = "Calibri",
+    fontSize     = 10,
+    border       = "TopBottomLeftRight",
+    borderColour = "#BFBFBF"
+  )
+  # Alternating row style
+  alt_style <- createStyle(
+    fontName     = "Calibri",
+    fontSize     = 10,
+    fgFill       = "#F2F7FF",
+    border       = "TopBottomLeftRight",
+    borderColour = "#BFBFBF"
+  )
+  
+  writeData(wb, sheet = sheet_name, x = data, headerStyle = hdr_style)
+  
+  n_rows <- nrow(data)
+  n_cols <- ncol(data)
+  
+  if (n_rows > 0) {
+    addStyle(wb, sheet_name,
+             style      = body_style,
+             rows       = 2:(n_rows + 1),
+             cols       = 1:n_cols,
+             gridExpand = TRUE)
+    
+    even_rows <- seq(3, n_rows + 1, by = 2)
+    if (length(even_rows) > 0) {
+      addStyle(wb, sheet_name,
+               style      = alt_style,
+               rows       = even_rows,
+               cols       = 1:n_cols,
+               gridExpand = TRUE)
+    }
+  }
+  
+  setColWidths(wb, sheet_name, cols = 1:n_cols, widths = "auto")
+  freezePane(wb, sheet_name, firstRow = TRUE)
+  setRowHeights(wb, sheet_name, rows = 1, heights = 22)
+  
+  invisible(wb)
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.3  Export plots — PNG only
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n── Exporting plots (PNG, 300 dpi) ───────────────────────────────────────\n")
+
+# ── Part 4: QC ────────────────────────────────────────────────────────────────
+d <- file.path(output_root, "plots", "01_QC")
+cat(" [QC]\n")
+save_gg(p_host_all,     file.path(d, "host_contamination_all_samples"),  width = 13, height = 6)
+save_gg(p_host_nonzero, file.path(d, "host_contamination_above_zero"),   width = 11, height = 6)
+save_gg(p_depth,        file.path(d, "sequencing_depth_per_sample"),     width = 13, height = 6)
+
+# ── Parts 5–6: PCA & Biplots ──────────────────────────────────────────────────
+d <- file.path(output_root, "plots", "02_PCA")
+cat(" [PCA]\n")
+save_gg(p_pca_12,       file.path(d, "pca_taxonomic_PC1_PC2"),     width = 9,  height = 7)
+save_gg(p_pca_13,       file.path(d, "pca_taxonomic_PC1_PC3"),     width = 9,  height = 7)
+save_gg(p_scree,        file.path(d, "pca_taxonomic_scree"),       width = 8,  height = 5)
+save_gg(p_biplot_12,    file.path(d, "pca_biplot_PC1_PC2"),        width = 11, height = 8)
+save_gg(p_biplot_13,    file.path(d, "pca_biplot_PC1_PC3"),        width = 11, height = 8)
+save_gg(p_biplot_panel, file.path(d, "pca_biplot_panel"),          width = 20, height = 8)
+save_gg(p_pca_ko_12,    file.path(d, "pca_KO_PC1_PC2"),            width = 9,  height = 7)
+save_gg(p_pca_ko_13,    file.path(d, "pca_KO_PC1_PC3"),            width = 9,  height = 7)
+save_gg(p_scree_ko,     file.path(d, "pca_KO_scree"),              width = 8,  height = 5)
+save_gg(p_compare,      file.path(d, "pca_taxonomic_vs_KO"),       width = 16, height = 7)
+
+# ── Part 7: Alpha Diversity ───────────────────────────────────────────────────
+d <- file.path(output_root, "plots", "03_Alpha_Diversity")
+cat(" [Alpha Diversity]\n")
+save_gg(p_depth,        file.path(d, "rarefaction_depth"),         width = 13, height = 6)
+save_gg(p_alpha_all,    file.path(d, "alpha_all_metrics_faceted"), width = 12, height = 10)
+save_gg(p_alpha_panel,  file.path(d, "alpha_2x2_panel"),           width = 14, height = 12)
+save_gg(p_observed,     file.path(d, "alpha_observed_richness"),   width = 7,  height = 6)
+save_gg(p_chao1,        file.path(d, "alpha_chao1"),               width = 7,  height = 6)
+save_gg(p_shannon,      file.path(d, "alpha_shannon"),             width = 7,  height = 6)
+save_gg(p_simpson,      file.path(d, "alpha_simpson"),             width = 7,  height = 6)
+
+# ── Part 8: Beta Diversity ────────────────────────────────────────────────────
+d <- file.path(output_root, "plots", "04_Beta_Diversity")
+cat(" [Beta Diversity]\n")
+
+pcoa_panel_width <- ifelse(length(pcoa_plots) == 3, 24, 16)
+
+for (dist_name in names(pcoa_plots)) {
+  fn <- gsub("[^a-zA-Z0-9]", "_", dist_name)
+  save_gg(pcoa_plots[[dist_name]],
+          file.path(d, sprintf("pcoa_%s", fn)), width = 9, height = 7)
+}
+save_gg(p_pcoa_panel, file.path(d, "pcoa_panel_all_distances"),
+        width = pcoa_panel_width, height = 7)
+
+for (dist_name in names(nmds_plots)) {
+  fn <- gsub("[^a-zA-Z0-9]", "_", dist_name)
+  save_gg(nmds_plots[[dist_name]],
+          file.path(d, sprintf("nmds_%s", fn)), width = 9, height = 7)
+}
+save_gg(p_nmds_panel, file.path(d, "nmds_panel_all_distances"),
+        width = pcoa_panel_width, height = 7)
+
+# ComplexHeatmap — base graphics device
+save_ht(ht, file.path(d, "beta_heatmap_top_species"), width = 14, height = 12)
+
+# ── Part 9: Differential Abundance ───────────────────────────────────────────
+d <- file.path(output_root, "plots", "05_Differential_Abundance")
+cat(" [Differential Abundance]\n")
+save_gg(p_volcano, file.path(d, "volcano_maaslin2"),  width = 11, height = 8)
+
+if (exists("p_bar_da") && !is.null(p_bar_da)) {
+  save_gg(p_bar_da,   file.path(d, "barplot_top_da_species"), width = 10, height = 9)
+  save_gg(p_da_panel, file.path(d, "da_combined_panel"),      width = 20, height = 8)
+}
+
+cat(sprintf("\n✔ All plots saved to: %s/plots/\n", output_root))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.4  Export statistical tables — formatted Excel workbooks
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n── Exporting statistical tables ─────────────────────────────────────────\n")
+
+tbl_dir <- file.path(output_root, "tables")
+
+# NMDS stress summary (reused across workbooks)
+nmds_stress_df <- tibble(
+  Distance = names(nmds_stress),
+  Stress   = round(unlist(nmds_stress), 4),
+  Quality  = case_when(
+    Stress < 0.10 ~ "Excellent (< 0.10)",
+    Stress < 0.20 ~ "Good (< 0.20)",
+    Stress < 0.30 ~ "Acceptable (< 0.30)",
+    TRUE          ~ "Poor — interpret with caution"
+  )
+)
+
+# ── Workbook 1: QC ────────────────────────────────────────────────────────────
+wb_qc <- createWorkbook()
+add_fmt_sheet(wb_qc, "Host_Contamination",
+              host_contamination_df %>%
+                arrange(desc(Host_Pct)) %>%
+                mutate(Host_Pct = round(Host_Pct, 4)),
+              hdr_color = "#7030A0")
+
+saveWorkbook(wb_qc,
+             file.path(tbl_dir, "01_QC_host_contamination.xlsx"),
+             overwrite = TRUE)
+cat("  ✔ 01_QC_host_contamination.xlsx\n")
+
+# ── Workbook 2: Alpha Diversity ───────────────────────────────────────────────
+wb_alpha <- createWorkbook()
+
+add_fmt_sheet(wb_alpha, "Descriptive_Statistics",
+              alpha_summary,                                hdr_color = "#2E75B6")
+add_fmt_sheet(wb_alpha, "Kruskal_Wallis",
+              kw_results,                                   hdr_color = "#2E75B6")
+add_fmt_sheet(wb_alpha, "Wilcoxon_Rank_Sum",
+              wx_results,                                   hdr_color = "#2E75B6")
+add_fmt_sheet(wb_alpha, "Per_Sample_Metrics",
+              alpha_div %>%
+                select(Sample_ID_FM_Pipeline, Group,
+                       Observed, Chao1, Shannon, Simpson) %>%
+                arrange(Group, Sample_ID_FM_Pipeline),      hdr_color = "#2E75B6")
+
+saveWorkbook(wb_alpha,
+             file.path(tbl_dir, "02_alpha_diversity_statistics.xlsx"),
+             overwrite = TRUE)
+cat("  ✔ 02_alpha_diversity_statistics.xlsx\n")
+
+# ── Workbook 3: Beta Diversity ────────────────────────────────────────────────
+wb_beta <- createWorkbook()
+
+add_fmt_sheet(wb_beta, "PERMANOVA_adonis2",  permanova_results, hdr_color = "#375623")
+add_fmt_sheet(wb_beta, "ANOSIM",             anosim_results,    hdr_color = "#375623")
+add_fmt_sheet(wb_beta, "Betadisper",         betadisp_results,  hdr_color = "#375623")
+add_fmt_sheet(wb_beta, "NMDS_Stress",        nmds_stress_df,    hdr_color = "#375623")
+add_fmt_sheet(wb_beta, "PCA_Loadings_Top",   loadings_table,    hdr_color = "#375623")
+
+saveWorkbook(wb_beta,
+             file.path(tbl_dir, "03_beta_diversity_statistics.xlsx"),
+             overwrite = TRUE)
+cat("  ✔ 03_beta_diversity_statistics.xlsx\n")
+
+# ── Workbook 4: Differential Abundance ───────────────────────────────────────
+wb_da <- createWorkbook()
+
+da_all <- maaslin_res %>%
+  select(Feature     = feature_clean,
+         Coefficient = coef,
+         SE          = stderr,
+         p_value     = pval,
+         q_value     = qval,
+         Direction,
+         N,
+         N_not_zero  = N.not.0) %>%
+  arrange(q_value, desc(abs(Coefficient)))
+
+da_sig          <- da_all %>% filter(q_value < q_threshold)
+da_enr_comp     <- da_all %>% filter(q_value < q_threshold, Coefficient > 0)
+da_enr_ref      <- da_all %>% filter(q_value < q_threshold, Coefficient < 0)
+
+add_fmt_sheet(wb_da, "All_Results",   da_all,  hdr_color = "#833C00")
+add_fmt_sheet(wb_da, "Significant",   da_sig,  hdr_color = "#833C00")
+
+if (nrow(da_enr_comp) > 0)
+  add_fmt_sheet(wb_da,
+                substr(paste0("Enriched_", comparison_group), 1, 31),
+                da_enr_comp,
+                hdr_color = group_colors[comparison_group])
+
+if (nrow(da_enr_ref) > 0)
+  add_fmt_sheet(wb_da,
+                substr(paste0("Enriched_", ref_group), 1, 31),
+                da_enr_ref,
+                hdr_color = group_colors[ref_group])
+
+saveWorkbook(wb_da,
+             file.path(tbl_dir, "04_differential_abundance_maaslin2.xlsx"),
+             overwrite = TRUE)
+cat("  ✔ 04_differential_abundance_maaslin2.xlsx\n")
+
+# ── Workbook 5: MASTER — all sections in one file ─────────────────────────────
+wb_master <- createWorkbook()
+
+add_fmt_sheet(wb_master, "QC_Host_Contamination",
+              host_contamination_df %>%
+                arrange(desc(Host_Pct)) %>%
+                mutate(Host_Pct = round(Host_Pct, 4)),     hdr_color = "#7030A0")
+add_fmt_sheet(wb_master, "Alpha_Descriptive",    alpha_summary,     hdr_color = "#2E75B6")
+add_fmt_sheet(wb_master, "Alpha_Kruskal_Wallis", kw_results,        hdr_color = "#2E75B6")
+add_fmt_sheet(wb_master, "Alpha_Wilcoxon",       wx_results,        hdr_color = "#2E75B6")
+add_fmt_sheet(wb_master, "Beta_PERMANOVA",       permanova_results, hdr_color = "#375623")
+add_fmt_sheet(wb_master, "Beta_ANOSIM",          anosim_results,    hdr_color = "#375623")
+add_fmt_sheet(wb_master, "Beta_Betadisper",      betadisp_results,  hdr_color = "#375623")
+add_fmt_sheet(wb_master, "Beta_NMDS_Stress",     nmds_stress_df,    hdr_color = "#375623")
+add_fmt_sheet(wb_master, "PCA_Loadings",         loadings_table,    hdr_color = "#375623")
+add_fmt_sheet(wb_master, "DA_All_Results",       da_all,            hdr_color = "#833C00")
+
+if (nrow(da_sig) > 0)
+  add_fmt_sheet(wb_master, "DA_Significant",     da_sig,            hdr_color = "#833C00")
+
+saveWorkbook(wb_master,
+             file.path(tbl_dir, "MASTER_all_results.xlsx"),
+             overwrite = TRUE)
+cat("  ✔ MASTER_all_results.xlsx  ← all sections combined\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.5  Export session info
+# ─────────────────────────────────────────────────────────────────────────────
+
+session_path <- file.path(output_root, "session_info.txt")
+sink(session_path)
+cat("══════════════════════════════════════════════════════════════\n")
+cat("  MICROBIOME ANALYSIS — SESSION INFORMATION\n")
+cat(sprintf("  Generated: %s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
+cat("══════════════════════════════════════════════════════════════\n\n")
+print(sessionInfo())
+sink()
+cat(sprintf("\n✔ Session info saved: session_info.txt\n"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.6  Final export summary
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n══════════════════════════════════════════════════════════════════════════\n")
+cat("  EXPORT COMPLETE\n")
+cat("══════════════════════════════════════════════════════════════════════════\n\n")
+cat(sprintf("  Root : %s/\n\n", output_root))
+cat("  plots/\n")
+cat("  ├── 01_QC/                       host contamination + depth\n")
+cat("  ├── 02_PCA/                      PCA, biplots, scree (taxonomic + KO)\n")
+cat("  ├── 03_Alpha_Diversity/          violin/boxplots, 2×2 panel\n")
+cat("  ├── 04_Beta_Diversity/           PCoA, NMDS, ComplexHeatmap\n")
+cat("  └── 05_Differential_Abundance/  volcano, bar plot, panel\n\n")
+cat("  tables/\n")
+cat("  ├── 01_QC_host_contamination.xlsx\n")
+cat("  ├── 02_alpha_diversity_statistics.xlsx\n")
+cat("  ├── 03_beta_diversity_statistics.xlsx\n")
+cat("  ├── 04_differential_abundance_maaslin2.xlsx\n")
+cat("  ├── MASTER_all_results.xlsx          ← all sections combined\n")
+cat("  └── session_info.txt\n\n")
+cat("  Format : PNG only · 300 dpi · white background\n")
+cat("  Tables : formatted Excel · coloured headers · frozen rows\n")
+cat("           alternating row shading · auto column widths\n")
+cat("══════════════════════════════════════════════════════════════════════════\n")
