@@ -870,37 +870,6 @@ cat("\n══ Descriptive Statistics per Group ═══════════
 print(alpha_summary, n = Inf)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #------------------------------------------ BETA -----------------------------
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -921,20 +890,16 @@ library(circlize)
 library(ape)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.1  Prepare rarefied OTU matrix from ps_rare (built in Part 7)
+# 8.1  Prepare rarefied OTU matrix from ps_rare (Part 7)
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE: fix_id() applied to reverse phyloseq make.names() on numeric sample IDs
+# NOTE: fix_id() reverses phyloseq make.names() on numeric sample IDs
 
 otu_rare_mat <- as.data.frame(otu_table(ps_rare))
-
-# Ensure samples are rows (transpose if taxa_are_rows = TRUE)
 if (taxa_are_rows(ps_rare)) otu_rare_mat <- t(otu_rare_mat)
 otu_rare_mat <- as.matrix(otu_rare_mat)
-
-# Reverse make.names() on rownames
 rownames(otu_rare_mat) <- fix_id(rownames(otu_rare_mat))
 
-# Relative abundance matrix (used for Bray-Curtis)
+# Relative abundance matrix
 otu_rel_mat <- sweep(otu_rare_mat, 1, rowSums(otu_rare_mat), "/")
 
 # Align metadata to OTU matrix row order
@@ -942,48 +907,119 @@ meta_beta <- metadata_final_qc %>%
   filter(Sample_ID_FM_Pipeline %in% rownames(otu_rare_mat)) %>%
   arrange(match(Sample_ID_FM_Pipeline, rownames(otu_rare_mat)))
 
-# Hard alignment check — stops execution if mismatch
 stopifnot(all(rownames(otu_rare_mat) == meta_beta$Sample_ID_FM_Pipeline))
-cat("✔ OTU matrix and metadata aligned correctly\n")
-cat(sprintf("  Matrix: %d samples × %d species\n",
+cat(sprintf("✔ OTU matrix aligned: %d samples × %d species\n",
             nrow(otu_rare_mat), ncol(otu_rare_mat)))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 8.2  Compute distance matrices
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Bray-Curtis — abundance-based (most common for microbiome)
+# Bray-Curtis — abundance-based
 dist_bray <- vegdist(otu_rel_mat, method = "bray")
 
-# Jaccard — presence/absence (binary)
+# Jaccard — presence/absence
 dist_jacc <- vegdist(otu_rare_mat, method = "jaccard", binary = TRUE)
 
-# UniFrac — requires a phylogenetic tree (not available for shotgun metagenomics)
-# If a tree is present in ps_rare, uncomment the lines below:
-# dist_unifrac_u <- UniFrac(ps_rare, weighted = FALSE, normalized = TRUE)
-# dist_unifrac_w <- UniFrac(ps_rare, weighted = TRUE,  normalized = TRUE)
-# Add to dist_list: "UniFrac (unweighted)" = dist_unifrac_u, etc.
+# Weighted UniFrac — requires phylogenetic tree in ps_rare
+# For shotgun metagenomics: add a tree with phy_tree(ps_rare) <- your_tree
+# For 16S data: tree is typically already present in the phyloseq object
+unifrac_available <- !is.null(tryCatch(phy_tree(ps_rare), error = function(e) NULL))
 
+if (unifrac_available) {
+  dist_unifrac_w <- UniFrac(ps_rare, weighted = TRUE, normalized = TRUE)
+  cat("✔ Weighted UniFrac computed\n")
+} else {
+  cat("⚠ Weighted UniFrac skipped — no phylogenetic tree found in ps_rare\n")
+  cat("  To enable: add a tree object → phy_tree(ps_rare) <- read.tree('your_tree.nwk')\n")
+}
+
+# Build distance list — UniFrac added only if tree is available
 dist_list <- list(
-  "Bray-Curtis" = dist_bray,
-  "Jaccard"     = dist_jacc
+  "Bray-Curtis"      = dist_bray,
+  "Jaccard"          = dist_jacc
 )
+if (unifrac_available) {
+  dist_list[["Weighted UniFrac"]] <- dist_unifrac_w
+}
 
-cat(sprintf("\nDistance matrices computed: %s\n",
+cat(sprintf("\nDistance matrices ready: %s\n",
             paste(names(dist_list), collapse = ", ")))
-cat("Note: UniFrac skipped — requires phylogenetic tree (unavailable in shotgun data)\n")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.3  Helper — generic ordination plot function
+# 8.3  Pre-compute PERMANOVA + ANOSIM for ALL distances
+#      *** Must run BEFORE PCoA plots so stats can be annotated on each plot ***
 # ─────────────────────────────────────────────────────────────────────────────
 
-plot_ord <- function(scores_df, x_col, y_col,
-                     x_label, y_label, title, subtitle) {
-  ggplot(scores_df,
-         aes(x     = .data[[x_col]],
-             y     = .data[[y_col]],
-             color = Group,
-             label = Sample_ID_FM_Pipeline)) +
+sig_stars <- function(p) {
+  case_when(
+    p < 0.001 ~ "***",
+    p < 0.01  ~ "**",
+    p < 0.05  ~ "*",
+    TRUE      ~ "ns"
+  )
+}
+
+stats_by_dist <- map(names(dist_list), function(dist_name) {
+  
+  # PERMANOVA
+  set.seed(42)
+  perm <- adonis2(
+    dist_list[[dist_name]] ~ Group,
+    data         = meta_beta,
+    permutations = 999,
+    by           = "margin"
+  )
+  perm_R2 <- round(perm$R2[1],          3)
+  perm_p  <- perm$`Pr(>F)`[1]
+  perm_F  <- round(perm$F[1],           3)
+  
+  # ANOSIM
+  set.seed(42)
+  ano    <- anosim(dist_list[[dist_name]],
+                   grouping     = meta_beta$Group,
+                   permutations = 999)
+  ano_R  <- round(ano$statistic, 3)
+  ano_p  <- ano$signif
+  
+  cat(sprintf(
+    "[%s] PERMANOVA: R²=%.3f, F=%.3f, p=%.4f%s | ANOSIM: R=%.3f, p=%.4f%s\n",
+    dist_name,
+    perm_R2, perm_F, perm_p, sig_stars(perm_p),
+    ano_R, ano_p, sig_stars(ano_p)
+  ))
+  
+  list(
+    permanova_R2  = perm_R2,
+    permanova_F   = perm_F,
+    permanova_p   = perm_p,
+    permanova_sig = sig_stars(perm_p),
+    anosim_R      = ano_R,
+    anosim_p      = ano_p,
+    anosim_sig    = sig_stars(ano_p),
+    # Formatted annotation string for plot
+    annot_text    = sprintf(
+      "PERMANOVA: R\u00B2 = %.3f, p = %.4f %s\nANOSIM:    R = %.3f,   p = %.4f %s",
+      perm_R2, perm_p, sig_stars(perm_p),
+      ano_R,   ano_p,  sig_stars(ano_p)
+    )
+  )
+}) %>% setNames(names(dist_list))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.4  Helper — ordination plot with optional stats annotation box
+# ─────────────────────────────────────────────────────────────────────────────
+
+plot_ord_stats <- function(scores_df, x_col, y_col,
+                           x_label, y_label,
+                           title, subtitle,
+                           stats_text = NULL) {
+  
+  p <- ggplot(scores_df,
+              aes(x     = .data[[x_col]],
+                  y     = .data[[y_col]],
+                  color = Group,
+                  label = Sample_ID_FM_Pipeline)) +
     geom_point(size = 3.5, alpha = 0.85) +
     geom_text_repel(
       size          = 2.8,
@@ -999,33 +1035,59 @@ plot_ord <- function(scores_df, x_col, y_col,
       linewidth = 0.7
     ) +
     scale_color_manual(values = group_colors) +
-    labs(title    = title,
-         subtitle = subtitle,
-         x        = x_label,
-         y        = y_label,
-         color    = "Group") +
+    labs(
+      title    = title,
+      subtitle = subtitle,
+      x        = x_label,
+      y        = y_label,
+      color    = "Group"
+    ) +
     theme_bw(base_size = 13) +
     theme(
       plot.title      = element_text(face = "bold"),
       plot.subtitle   = element_text(color = "grey40", size = 10),
       legend.position = "right"
     )
+  
+  # Add PERMANOVA + ANOSIM annotation box (bottom-right corner)
+  if (!is.null(stats_text)) {
+    p <- p +
+      annotate(
+        "label",
+        x          = Inf,
+        y          = -Inf,
+        label      = stats_text,
+        hjust      = 1.03,
+        vjust      = -0.15,
+        size       = 3.0,
+        color      = "black",
+        fill       = "white",
+        alpha      = 0.88,
+        label.size = 0.35,
+        family     = "mono",
+        fontface   = "plain"
+      )
+  }
+  
+  p
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.4  PCoA — Principal Coordinates Analysis
+# 8.5  PCoA — with PERMANOVA + ANOSIM annotations
 # ─────────────────────────────────────────────────────────────────────────────
 
 pcoa_plots <- list()
 
 for (dist_name in names(dist_list)) {
   
+  # Run PCoA
   pcoa_res <- pcoa(dist_list[[dist_name]])
   
   # Variance explained (positive eigenvalues only)
   eig      <- pcoa_res$values$Eigenvalues
   var_pcoa <- round(eig[eig > 0] / sum(eig[eig > 0]) * 100, 1)
   
+  # Build scores data frame
   pcoa_df <- as.data.frame(pcoa_res$vectors[, 1:2]) %>%
     setNames(c("Axis1", "Axis2")) %>%
     rownames_to_column("Sample_ID_FM_Pipeline") %>%
@@ -1035,32 +1097,43 @@ for (dist_name in names(dist_list)) {
       by = "Sample_ID_FM_Pipeline"
     )
   
-  pcoa_plots[[dist_name]] <- plot_ord(
-    pcoa_df,
-    x_col    = "Axis1",
-    y_col    = "Axis2",
-    x_label  = sprintf("PCoA Axis 1 (%.1f%%)", var_pcoa[1]),
-    y_label  = sprintf("PCoA Axis 2 (%.1f%%)", var_pcoa[2]),
-    title    = sprintf("PCoA — %s", dist_name),
-    subtitle = "Rarefied species counts"
+  # Retrieve pre-computed stats annotation
+  annot <- stats_by_dist[[dist_name]]$annot_text
+  
+  p <- plot_ord_stats(
+    scores_df  = pcoa_df,
+    x_col      = "Axis1",
+    y_col      = "Axis2",
+    x_label    = sprintf("PCoA Axis 1 (%.1f%%)", var_pcoa[1]),
+    y_label    = sprintf("PCoA Axis 2 (%.1f%%)", var_pcoa[2]),
+    title      = sprintf("PCoA — %s Distance", dist_name),
+    subtitle   = "Rarefied species counts | 999 permutations",
+    stats_text = annot
   )
   
-  print(pcoa_plots[[dist_name]])
+  pcoa_plots[[dist_name]] <- p
+  print(p)
 }
 
-# Side-by-side PCoA panel
-p_pcoa_panel <- wrap_plots(pcoa_plots, ncol = 2) +
+# Combined panel — 2 columns (3 plots if UniFrac available)
+n_cols_pcoa <- ifelse(length(pcoa_plots) == 3, 3, 2)
+
+p_pcoa_panel <- wrap_plots(pcoa_plots, ncol = n_cols_pcoa) +
   plot_layout(guides = "collect") +
   plot_annotation(
-    title = "PCoA — Beta Diversity (Rarefied Data)",
-    theme = theme(plot.title = element_text(face = "bold", size = 15))
+    title    = "PCoA — Beta Diversity (Rarefied Data)",
+    subtitle = "",
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
   ) &
   theme(legend.position = "bottom")
 
 print(p_pcoa_panel)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.5  NMDS — Non-metric Multidimensional Scaling
+# 8.6  NMDS — Non-metric Multidimensional Scaling
 # ─────────────────────────────────────────────────────────────────────────────
 
 nmds_plots  <- list()
@@ -1097,28 +1170,33 @@ for (dist_name in names(dist_list)) {
       by = "Sample_ID_FM_Pipeline"
     )
   
-  p <- plot_ord(
-    nmds_df,
-    x_col    = "NMDS1",
-    y_col    = "NMDS2",
-    x_label  = "NMDS1",
-    y_label  = "NMDS2",
-    title    = sprintf("NMDS — %s", dist_name),
-    subtitle = sprintf("Stress = %.4f (%s) | Rarefied species counts",
-                       stress_val, stress_label)
+  p <- plot_ord_stats(
+    scores_df  = nmds_df,
+    x_col      = "NMDS1",
+    y_col      = "NMDS2",
+    x_label    = "NMDS1",
+    y_label    = "NMDS2",
+    title      = sprintf("NMDS — %s Distance", dist_name),
+    subtitle   = sprintf("Stress = %.4f (%s) | Rarefied species counts",
+                         stress_val, stress_label),
+    stats_text = NULL   # stats shown on PCoA; NMDS keeps stress annotation only
   ) +
     annotate("text",
-             x     = -Inf, y = Inf,
+             x     = -Inf,
+             y     = Inf,
              label = sprintf("Stress: %.4f", stress_val),
-             hjust = -0.1, vjust = 1.3,
-             size  = 3.5, color = "grey30", fontface = "italic")
+             hjust = -0.1,
+             vjust = 1.4,
+             size  = 3.5,
+             color = "grey30",
+             fontface = "italic")
   
   nmds_plots[[dist_name]] <- p
   print(p)
 }
 
-# Side-by-side NMDS panel
-p_nmds_panel <- wrap_plots(nmds_plots, ncol = 2) +
+# Combined NMDS panel
+p_nmds_panel <- wrap_plots(nmds_plots, ncol = n_cols_pcoa) +
   plot_layout(guides = "collect") +
   plot_annotation(
     title = "NMDS — Beta Diversity (Rarefied Data)",
@@ -1129,162 +1207,119 @@ p_nmds_panel <- wrap_plots(nmds_plots, ncol = 2) +
 print(p_nmds_panel)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.6  ComplexHeatmap — Top variable species
+# 8.7  ComplexHeatmap — Top variable species
 # ─────────────────────────────────────────────────────────────────────────────
 
-n_top <- 50   # number of most variable species to display
+n_top <- 50
 
-# Select top N by variance across samples
 top_species <- apply(otu_rel_mat, 2, var) %>%
   sort(decreasing = TRUE) %>%
   head(n_top) %>%
   names()
 
-# Build species × samples matrix and z-score normalize
 heat_mat   <- t(otu_rel_mat[, top_species])
-heat_mat_z <- t(scale(t(heat_mat)))                   # z-score per species (row)
-heat_mat_z <- pmax(pmin(heat_mat_z, 3), -3)           # cap at ±3 for visualization
+heat_mat_z <- t(scale(t(heat_mat)))
+heat_mat_z <- pmax(pmin(heat_mat_z, 3), -3)
 
-# Clean species display names (keep "Genus|Species" → "Species")
 rownames(heat_mat_z) <- sub("^[^|]*\\|", "", rownames(heat_mat_z))
 colnames(heat_mat_z) <- fix_id(colnames(heat_mat_z))
 
-# Pre-compute dendrograms using Bray-Curtis for samples, Euclidean for species
-hclust_cols <- hclust(dist_bray,           method = "ward.D2")
-hclust_rows <- hclust(dist(heat_mat_z),    method = "ward.D2")
+hclust_cols <- hclust(dist_bray,        method = "ward.D2")
+hclust_rows <- hclust(dist(heat_mat_z), method = "ward.D2")
 
-# Colour scale: blue → white → red
 col_fun <- colorRamp2(
   c(-3, -1.5, 0, 1.5, 3),
   c("#2166AC", "#92C5DE", "white", "#F4A582", "#D6604D")
 )
 
-# Top column annotation (Group)
 col_anno <- HeatmapAnnotation(
   Group = meta_beta$Group,
   col   = list(Group = group_colors),
-  annotation_name_gp       = gpar(fontsize = 11, fontface = "bold"),
-  annotation_legend_param  = list(
+  annotation_name_gp      = gpar(fontsize = 11, fontface = "bold"),
+  annotation_legend_param = list(
     Group = list(title_gp = gpar(fontface = "bold"))
   )
 )
 
 ht <- Heatmap(
   heat_mat_z,
-  name                        = "Z-score",
-  col                         = col_fun,
-  top_annotation              = col_anno,
-  cluster_rows                = hclust_rows,
-  cluster_columns             = hclust_cols,
-  show_column_names           = TRUE,
-  column_names_gp             = gpar(fontsize = 8),
-  show_row_names              = TRUE,
-  row_names_gp                = gpar(fontsize = 7.5),
-  row_names_side              = "left",
-  row_dend_side               = "right",
-  column_title                = sprintf(
+  name                 = "Z-score",
+  col                  = col_fun,
+  top_annotation       = col_anno,
+  cluster_rows         = hclust_rows,
+  cluster_columns      = hclust_cols,
+  show_column_names    = TRUE,
+  column_names_gp      = gpar(fontsize = 8),
+  show_row_names       = TRUE,
+  row_names_gp         = gpar(fontsize = 7.5),
+  row_names_side       = "left",
+  row_dend_side        = "right",
+  column_title         = sprintf(
     "Beta Diversity Heatmap — Top %d Variable Species (Z-score, Bray-Curtis clustering)",
     n_top
   ),
-  column_title_gp             = gpar(fontsize = 12, fontface = "bold"),
-  heatmap_legend_param        = list(
+  column_title_gp      = gpar(fontsize = 12, fontface = "bold"),
+  heatmap_legend_param = list(
     title    = "Z-score",
     at       = c(-3, -1.5, 0, 1.5, 3),
     title_gp = gpar(fontface = "bold")
   ),
-  border                      = TRUE
+  border = TRUE
 )
 
 draw(ht, merge_legend = TRUE)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.7  PERMANOVA — vegan::adonis2
-# ─────────────────────────────────────────────────────────────────────────────
-# Tests whether group centroids differ (multivariate analogue of ANOVA)
-# Assumption: homogeneous within-group dispersion — checked in 8.9
-
-permanova_results <- map_dfr(names(dist_list), function(dist_name) {
-  
-  set.seed(42)
-  perm <- adonis2(
-    dist_list[[dist_name]] ~ Group,
-    data         = meta_beta,
-    permutations = 999,
-    by           = "margin"
-  )
-  
-  tibble(
-    Distance = dist_name,
-    Df       = perm$Df[1],
-    SumOfSqs = round(perm$SumOfSqs[1], 4),
-    R2       = round(perm$R2[1], 4),
-    F_stat   = round(perm$F[1], 4),
-    p_value  = perm$`Pr(>F)`[1],
-    Sig      = case_when(
-      perm$`Pr(>F)`[1] < 0.001 ~ "***",
-      perm$`Pr(>F)`[1] < 0.01  ~ "**",
-      perm$`Pr(>F)`[1] < 0.05  ~ "*",
-      TRUE                      ~ "ns"
-    )
-  )
-})
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8.8  ANOSIM — vegan::anosim
-# ─────────────────────────────────────────────────────────────────────────────
-# Ranks-based: R > 0.75 strong, > 0.5 moderate, > 0.25 weak separation
-
-anosim_results <- map_dfr(names(dist_list), function(dist_name) {
-  
-  set.seed(42)
-  ano <- anosim(
-    dist_list[[dist_name]],
-    grouping     = meta_beta$Group,
-    permutations = 999
-  )
-  
-  tibble(
-    Distance = dist_name,
-    R_stat   = round(ano$statistic, 4),
-    p_value  = ano$signif,
-    Strength = case_when(
-      ano$statistic > 0.75 ~ "strong",
-      ano$statistic > 0.50 ~ "moderate",
-      ano$statistic > 0.25 ~ "weak",
-      TRUE                 ~ "negligible"
-    ),
-    Sig = case_when(
-      ano$signif < 0.001 ~ "***",
-      ano$signif < 0.01  ~ "**",
-      ano$signif < 0.05  ~ "*",
-      TRUE               ~ "ns"
-    )
-  )
-})
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8.9  Homogeneity of dispersion — betadisper
-#      PERMANOVA assumption check: groups should have equal spread
+# 8.8  Homogeneity of dispersion — betadisper (PERMANOVA assumption check)
 # ─────────────────────────────────────────────────────────────────────────────
 
 betadisp_results <- map_dfr(names(dist_list), function(dist_name) {
   
   beta_d <- betadisper(dist_list[[dist_name]], group = meta_beta$Group)
-  
   set.seed(42)
   perm_d <- permutest(beta_d, permutations = 999)
   
-  f_stat  <- round(perm_d$tab[1, "F"],       4)
-  p_disp  <- round(perm_d$tab[1, "Pr(>F)"], 4)
-  
   tibble(
     Distance = dist_name,
-    F_stat   = f_stat,
-    p_value  = p_disp,
+    F_stat   = round(perm_d$tab[1, "F"],        4),
+    p_value  = round(perm_d$tab[1, "Pr(>F)"],   4),
     Result   = case_when(
-      p_disp < 0.05 ~ "⚠ Unequal dispersion — PERMANOVA result may reflect dispersion, not location",
-      TRUE          ~ "✔ Homogeneous dispersion — PERMANOVA result reliable"
+      perm_d$tab[1, "Pr(>F)"] < 0.05 ~
+        "⚠ Unequal dispersion — PERMANOVA result may reflect spread, not location",
+      TRUE ~
+        "✔ Homogeneous dispersion — PERMANOVA result reliable"
     )
+  )
+})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.9  Build full results tables from pre-computed stats (8.3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+permanova_results <- map_dfr(names(stats_by_dist), function(dist_name) {
+  s <- stats_by_dist[[dist_name]]
+  tibble(
+    Distance = dist_name,
+    R2       = s$permanova_R2,
+    F_stat   = s$permanova_F,
+    p_value  = s$permanova_p,
+    Sig      = s$permanova_sig
+  )
+})
+
+anosim_results <- map_dfr(names(stats_by_dist), function(dist_name) {
+  s <- stats_by_dist[[dist_name]]
+  tibble(
+    Distance = dist_name,
+    R_stat   = s$anosim_R,
+    p_value  = s$anosim_p,
+    Strength = case_when(
+      s$anosim_R > 0.75 ~ "strong",
+      s$anosim_R > 0.50 ~ "moderate",
+      s$anosim_R > 0.25 ~ "weak",
+      TRUE              ~ "negligible"
+    ),
+    Sig = s$anosim_sig
   )
 })
 
