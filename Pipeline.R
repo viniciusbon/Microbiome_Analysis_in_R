@@ -1342,3 +1342,349 @@ print(anosim_results, n = Inf)
 cat("\n── Homogeneity of Dispersion (betadisper) ───────────────────────────────\n")
 cat("PERMANOVA assumption: groups must have equal within-group spread\n\n")
 print(betadisp_results, n = Inf)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 9 — DIFFERENTIAL ABUNDANCE: MaAsLin2 + VOLCANO PLOT
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 9.0  Ensure MaAsLin2 is loaded ──────────────────────────────────────────────
+
+if (!requireNamespace("Maaslin2", quietly = TRUE))
+  BiocManager::install("Maaslin2")
+library(Maaslin2)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.1  Prepare MaAsLin2 input
+#      Uses unrarefied filtered counts — MaAsLin2 handles normalisation internally
+#      Rarefied data (ps_rare) is NOT recommended for differential abundance
+# ─────────────────────────────────────────────────────────────────────────────
+
+sample_cols_tax <- setdiff(colnames(tax_counts_final_qc), tax_cols)
+
+species_maaslin <- tax_counts_final_qc %>%
+  filter(!is.na(s), s != "") %>%
+  mutate(tax_id = make.unique(paste(g, s, sep = "|")))
+
+# Features matrix: samples × species  (MaAsLin2 expects rows = samples)
+maaslin_features <- species_maaslin %>%
+  select(tax_id, all_of(sample_cols_tax)) %>%
+  column_to_rownames("tax_id") %>%
+  t() %>%
+  as.data.frame()
+
+rownames(maaslin_features) <- fix_id(rownames(maaslin_features))
+
+# Metadata: samples × variables
+maaslin_meta <- metadata_final_qc %>%
+  column_to_rownames("Sample_ID_FM_Pipeline") %>%
+  as.data.frame()
+
+# Align to common samples
+common_s       <- intersect(rownames(maaslin_features), rownames(maaslin_meta))
+maaslin_features <- maaslin_features[common_s, ]
+maaslin_meta     <- maaslin_meta[common_s, , drop = FALSE]
+
+cat(sprintf("\nMaAsLin2 input: %d samples × %d features\n",
+            nrow(maaslin_features), ncol(maaslin_features)))
+
+# Set reference group
+# Positive coefficient  → higher in comparison group (Symphiome)
+# Negative coefficient  → higher in reference group  (Cp Challenge Control)
+ref_group        <- "Cp Challenge Control"
+comparison_group <- setdiff(unique(maaslin_meta$Group), ref_group)
+maaslin_meta$Group <- relevel(factor(maaslin_meta$Group), ref = ref_group)
+
+cat(sprintf("Reference : %s\nComparison: %s\n", ref_group, comparison_group))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.2  Run MaAsLin2
+# ─────────────────────────────────────────────────────────────────────────────
+
+maaslin_output_dir <- "maaslin2_output"
+
+set.seed(42)
+maaslin_fit <- Maaslin2(
+  input_data      = maaslin_features,
+  input_metadata  = maaslin_meta,
+  output          = maaslin_output_dir,
+  fixed_effects   = "Group",
+  normalization   = "TSS",     # Total Sum Scaling → relative abundance
+  transform       = "LOG",     # Log transformation
+  analysis_method = "LM",      # Linear model
+  min_abundance   = 0,         # Already filtered in Part 4.7
+  min_prevalence  = 0,         # Already filtered in Part 4.7
+  max_significance = 0.25,     # MaAsLin2 default q-value threshold
+  correction      = "BH",      # Benjamini-Hochberg FDR
+  standardize     = FALSE,
+  plot_heatmap    = FALSE,      # Custom plots below
+  plot_scatter    = FALSE,
+  cores           = 1
+)
+
+cat(sprintf("\n✔ MaAsLin2 complete. Results saved to: %s/\n", maaslin_output_dir))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.3  Process results
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Significance thresholds (adjustable)
+q_threshold    <- 0.25    # MaAsLin2 standard; use 0.05 for stricter analysis
+coef_threshold <- 0.5     # minimum effect size for volcano dashed lines
+
+maaslin_res <- maaslin_fit$results %>%
+  as_tibble() %>%
+  filter(metadata == "Group") %>%
+  arrange(qval, pval) %>%
+  mutate(
+    # Clean display name: keep only the species part after "|"
+    feature_clean = sub("^[^|]*\\|", "", feature),
+    # Guard against qval = 0 or NA before -log10
+    qval_safe     = pmax(qval, 1e-10),
+    neg_log10_q   = -log10(qval_safe),
+    # Direction labels
+    Direction = case_when(
+      qval < q_threshold & coef > 0 ~ paste("Enriched in", comparison_group),
+      qval < q_threshold & coef < 0 ~ paste("Enriched in", ref_group),
+      TRUE                           ~ "Not significant"
+    )
+  )
+
+# Summary counts
+n_sig_25  <- sum(maaslin_res$qval < 0.25, na.rm = TRUE)
+n_sig_05  <- sum(maaslin_res$qval < 0.05, na.rm = TRUE)
+n_enr_comp <- sum(maaslin_res$qval < q_threshold & maaslin_res$coef > 0, na.rm = TRUE)
+n_enr_ref  <- sum(maaslin_res$qval < q_threshold & maaslin_res$coef < 0, na.rm = TRUE)
+
+cat(sprintf(
+  "\nFeatures tested : %d\nSignificant q<0.25 : %d\nSignificant q<0.05 : %d\n",
+  nrow(maaslin_res), n_sig_25, n_sig_05
+))
+cat(sprintf(
+  "Enriched in %-30s: %d\nEnriched in %-30s: %d\n",
+  comparison_group, n_enr_comp,
+  ref_group,        n_enr_ref
+))
+
+# Print top hits
+cat("\n══ Top Significant Features ═════════════════════════════════════════════\n")
+print(
+  maaslin_res %>%
+    filter(qval < q_threshold) %>%
+    select(feature_clean, coef, stderr, pval, qval, Direction) %>%
+    arrange(qval),
+  n = 30
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.4  Colour scheme (inherits group_colors from Part 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+volcano_colors <- c(
+  setNames(group_colors[comparison_group], paste("Enriched in", comparison_group)),
+  setNames(group_colors[ref_group],        paste("Enriched in", ref_group)),
+  "Not significant" = "grey72"
+)
+
+# Top labels: up to 12 per direction, prioritised by lowest q then largest |coef|
+top_labels <- maaslin_res %>%
+  filter(qval < q_threshold) %>%
+  group_by(Direction) %>%
+  arrange(qval, desc(abs(coef))) %>%
+  slice_head(n = 12) %>%
+  ungroup()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.5  Volcano plot
+# ─────────────────────────────────────────────────────────────────────────────
+
+p_volcano <- ggplot(maaslin_res,
+                    aes(x     = coef,
+                        y     = neg_log10_q,
+                        color = Direction,
+                        size  = abs(coef))) +
+  # Background points
+  geom_point(alpha = 0.72) +
+  # Labels for significant features
+  geom_text_repel(
+    data          = top_labels,
+    aes(label     = feature_clean),
+    size          = 2.9,
+    max.overlaps  = 30,
+    segment.color = "grey50",
+    segment.size  = 0.3,
+    box.padding   = 0.45,
+    show.legend   = FALSE
+  ) +
+  # Horizontal q-value threshold line
+  geom_hline(
+    yintercept = -log10(q_threshold),
+    linetype   = "dashed",
+    color      = "grey35",
+    linewidth  = 0.6
+  ) +
+  # Vertical effect size threshold lines
+  geom_vline(
+    xintercept = c(-coef_threshold, coef_threshold),
+    linetype   = "dashed",
+    color      = "grey35",
+    linewidth  = 0.6
+  ) +
+  # Threshold annotations
+  annotate("text",
+           x = max(maaslin_res$coef, na.rm = TRUE),
+           y = -log10(q_threshold),
+           label    = sprintf("q = %.2f", q_threshold),
+           hjust    = 1, vjust = -0.4,
+           size     = 3.2, color = "grey35", fontface = "italic") +
+  # Enrichment count labels in corners
+  annotate("text",
+           x = min(maaslin_res$coef, na.rm = TRUE),
+           y = max(maaslin_res$neg_log10_q, na.rm = TRUE),
+           label    = sprintf("n = %d", n_enr_ref),
+           hjust    = 0, vjust = 1,
+           size     = 4, color = group_colors[ref_group], fontface = "bold") +
+  annotate("text",
+           x = max(maaslin_res$coef, na.rm = TRUE),
+           y = max(maaslin_res$neg_log10_q, na.rm = TRUE),
+           label    = sprintf("n = %d", n_enr_comp),
+           hjust    = 1, vjust = 1,
+           size     = 4, color = group_colors[comparison_group], fontface = "bold") +
+  scale_color_manual(values = volcano_colors) +
+  scale_size_continuous(range = c(1.5, 4.5), guide = "none") +
+  labs(
+    title    = "Differential Abundance — MaAsLin2",
+    subtitle = sprintf(
+      "%s vs %s  ·  TSS + LOG  ·  BH correction  ·  dashed lines: q = %.2f, |coef| = %.1f",
+      comparison_group, ref_group, q_threshold, coef_threshold
+    ),
+    x     = sprintf(
+      "MaAsLin2 Coefficient (log-fold change)\n\u2190 Higher in %s  |  Higher in %s \u2192",
+      ref_group, comparison_group
+    ),
+    y     = expression(-log[10](q-value)),
+    color = NULL
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    plot.subtitle   = element_text(color = "grey40", size = 9.5),
+    legend.position = "bottom",
+    legend.text     = element_text(size = 10)
+  )
+
+print(p_volcano)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.6  Effect size bar plot — top differentially abundant species
+# ─────────────────────────────────────────────────────────────────────────────
+
+n_top_bar <- 20   # max features per direction to show
+
+top_pos <- maaslin_res %>%
+  filter(qval < q_threshold, coef > 0) %>%
+  arrange(qval, desc(coef)) %>%
+  head(n_top_bar / 2)
+
+top_neg <- maaslin_res %>%
+  filter(qval < q_threshold, coef < 0) %>%
+  arrange(qval, coef) %>%
+  head(n_top_bar / 2)
+
+top_features_bar <- bind_rows(top_neg, top_pos) %>%
+  mutate(feature_clean = fct_reorder(feature_clean, coef))
+
+if (nrow(top_features_bar) > 0) {
+  
+  p_bar_da <- ggplot(top_features_bar,
+                     aes(x = coef, y = feature_clean, fill = Direction)) +
+    geom_col(alpha = 0.85, width = 0.75) +
+    geom_errorbarh(
+      aes(xmin = coef - stderr, xmax = coef + stderr),
+      height    = 0.3,
+      color     = "grey25",
+      linewidth = 0.5
+    ) +
+    geom_vline(xintercept = 0, color = "black", linewidth = 0.5) +
+    scale_fill_manual(values = volcano_colors) +
+    labs(
+      title    = sprintf("Top %d Differentially Abundant Species", nrow(top_features_bar)),
+      subtitle = sprintf(
+        "MaAsLin2  ·  q < %.2f  ·  Error bars = ±1 SE  ·  TSS + LOG normalization",
+        q_threshold
+      ),
+      x    = sprintf(
+        "MaAsLin2 Coefficient\n\u2190 Higher in %s  |  Higher in %s \u2192",
+        ref_group, comparison_group
+      ),
+      y    = NULL,
+      fill = NULL
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      plot.title      = element_text(face = "bold"),
+      plot.subtitle   = element_text(color = "grey40", size = 9.5),
+      legend.position = "bottom",
+      axis.text.y     = element_text(size = 9)
+    )
+  
+  print(p_bar_da)
+  
+  # Combined panel: volcano + bar
+  p_da_panel <- p_volcano + p_bar_da +
+    plot_layout(widths = c(1.4, 1)) +
+    plot_annotation(
+      title = "Differential Abundance Analysis — MaAsLin2",
+      theme = theme(plot.title = element_text(face = "bold", size = 15))
+    )
+  
+  print(p_da_panel)
+  
+} else {
+  cat("\n⚠ No features passed q < 0.25 — bar plot skipped\n")
+  cat("  Suggestions:\n")
+  cat("  1. Relax threshold: q_threshold <- 0.30\n")
+  cat("  2. Check sample sizes per group\n")
+  cat("  3. Review prevalence filter in Part 4.7\n")
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.7  Save results table
+# ─────────────────────────────────────────────────────────────────────────────
+
+results_export <- maaslin_res %>%
+  select(
+    Feature       = feature_clean,
+    Coefficient   = coef,
+    SE            = stderr,
+    p_value       = pval,
+    q_value       = qval,
+    Direction,
+    N             = N,
+    N_not_zero    = N.not.0
+  ) %>%
+  arrange(q_value, desc(abs(Coefficient)))
+
+write_csv(results_export,
+          file.path(maaslin_output_dir, "maaslin2_results_clean.csv"))
+
+cat(sprintf("\n✔ Clean results table saved: %s/maaslin2_results_clean.csv\n",
+            maaslin_output_dir))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.8  Full summary
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n══════════════════════════════════════════════════════════════════════════\n")
+cat("  DIFFERENTIAL ABUNDANCE — MaAsLin2 SUMMARY\n")
+cat("══════════════════════════════════════════════════════════════════════════\n")
+cat(sprintf("  Reference group         : %s\n",  ref_group))
+cat(sprintf("  Comparison group        : %s\n",  comparison_group))
+cat(sprintf("  Normalization           : TSS + LOG\n"))
+cat(sprintf("  Multiple test correction: Benjamini-Hochberg (BH)\n"))
+cat(sprintf("  Features tested         : %d\n",  nrow(maaslin_res)))
+cat(sprintf("  Significant (q < 0.25)  : %d\n",  n_sig_25))
+cat(sprintf("  Significant (q < 0.05)  : %d\n",  n_sig_05))
+cat(sprintf("  Enriched in %-27s: %d\n", comparison_group, n_enr_comp))
+cat(sprintf("  Enriched in %-27s: %d\n", ref_group,        n_enr_ref))
+cat(sprintf("  Output directory        : %s/\n",  maaslin_output_dir))
