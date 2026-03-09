@@ -6,26 +6,48 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 0 — INSTALLATION
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# PART 0 — INSTALLATION
+# ─────────────────────────────────────────────────────────────────────────────
 
-if (!requireNamespace("BiocManager", quietly = TRUE))
+# Verifica e instala 'BiocManager' se necessário
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
   install.packages("BiocManager")
+}
 
-BiocManager::install(c(
+# Lista de pacotes Bioconductor
+bioc_packages <- c(
   "phyloseq", "microbiome", "DESeq2", "ALDEx2",
   "lefser", "KEGGREST", "clusterProfiler",
-  "MicrobiomeStat", "Maaslin2"
-))
+  "MicrobiomeStat", "Maaslin2", "ComplexHeatmap"
+)
 
-install.packages(c(
+# Instala pacotes Bioconductor se não estiverem presentes
+for (pkg in bioc_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    BiocManager::install(pkg)
+  }
+}
+
+# Lista de pacotes CRAN
+cran_packages <- c(
   "tidyverse", "vegan", "ggplot2", "ggrepel",
   "reshape2", "RColorBrewer", "pheatmap",
-  "ggpubr", "scales", "patchwork"
-))
+  "ggpubr", "scales", "patchwork", "ape", "circlize"
+)
+
+# Instala pacotes CRAN se não estiverem presentes
+for (pkg in cran_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 1 — LIBRARIES
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Carrega as bibliotecas
 library(tidyverse)
 library(phyloseq)
 library(vegan)
@@ -37,6 +59,9 @@ library(microbiome)
 library(Maaslin2)
 library(pheatmap)
 library(RColorBrewer)
+library(ComplexHeatmap)
+library(circlize)
+library(ape)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 2 — DATA READING AND ID STANDARDIZATION
@@ -876,19 +901,6 @@ print(alpha_summary, n = Inf)
 # PART 8 — BETA DIVERSITY: DISTANCES + ORDINATION + HEATMAP + STATISTICS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 8.0  Additional install & libraries ─────────────────────────────────────────
-
-if (!requireNamespace("ComplexHeatmap", quietly = TRUE))
-  BiocManager::install("ComplexHeatmap")
-if (!requireNamespace("ape", quietly = TRUE))
-  install.packages("ape")
-if (!requireNamespace("circlize", quietly = TRUE))
-  install.packages("circlize")
-
-library(ComplexHeatmap)
-library(circlize)
-library(ape)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 8.1  Prepare rarefied OTU matrix from ps_rare (Part 7)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1347,12 +1359,6 @@ print(betadisp_results, n = Inf)
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 9 — DIFFERENTIAL ABUNDANCE: MaAsLin2 + VOLCANO PLOT
 # ─────────────────────────────────────────────────────────────────────────────
-
-# 9.0  Ensure MaAsLin2 is loaded ──────────────────────────────────────────────
-
-if (!requireNamespace("Maaslin2", quietly = TRUE))
-  BiocManager::install("Maaslin2")
-library(Maaslin2)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 9.1  Prepare MaAsLin2 input
