@@ -2,10 +2,6 @@
 # ============================================================
 # MICROBIOME ANALYSIS — COMPLETE REVISED CODE v001
 # ============================================================
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PART 0 — INSTALLATION
-# ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 0 — INSTALLATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -68,7 +64,7 @@ library(openxlsx)
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Folder containing all input files for this dataset
-data_dir <- "ANH/Simphyome_Analysis/Mick_example_Files"
+data_dir <- "C:/Users/dti-/Documents/ANH/Simphyome_Analysis/Teste"
 
 # Groups to include in the analysis
 # Set to NULL to automatically use ALL groups found in the metadata file
