@@ -4,9 +4,8 @@
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PART 0 — DIR
+# PART 0 — INSTALLATION
 # ─────────────────────────────────────────────────────────────────────────────
-setwd("YOUR_DIR")
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 0 — INSTALLATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,61 +63,335 @@ library(ComplexHeatmap)
 library(circlize)
 library(ape)
 library(openxlsx)
+# ═════════════════════════════════════════════════════════════════════════════
+# ████  DATASET CONFIGURATION — ONLY THIS BLOCK NEEDS EDITING PER DATASET ████
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Folder containing all input files for this dataset
+data_dir <- "ANH/Simphyome_Analysis/Mick_example_Files"
+
+# Groups to include in the analysis
+# Set to NULL to automatically use ALL groups found in the metadata file
+groups_to_compare <- c("Cp Challenge Control", "Symphiome")   # or NULL
+
+# Metadata column names — set to NULL for auto-detection
+sample_id_col <- NULL    # column containing sample IDs
+group_col     <- NULL    # column containing group / treatment labels
+
+# ═════════════════════════════════════════════════════════════════════════════
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PART 2 — DATA READING AND ID STANDARDIZATION
+# PART 2 — AUTO FILE DETECTION + FORMAT INFERENCE + READING + STANDARDIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 fix_id   <- function(x) sub("^X(?=\\d)", "", x, perl = TRUE)
 tax_cols <- c("k", "p", "c", "o", "f", "g", "s")
 
-# 2.1  Reading
-tax_counts_df <- read_csv(
-  "ANH/Simphyome_Analysis/Mick_example_Files/hav2101_all_samples_counts_wide_tsv_converted_to_csv.csv"
-)
-metadata_df <- read_csv(
-  "ANH/Simphyome_Analysis/Mick_example_Files/HAV2101_sample_metadata.csv"
-)
-ko_counts_df <- read.table(
-  "ANH/Simphyome_Analysis/Mick_example_Files/hav2101_ko_count_table.txt",
-  header = TRUE, sep = "\t", dec = "."
-)
+# ── 2.1  Scan folder and assign roles by filename ────────────────────────────
+#
+#  Rules (case-insensitive filename matching):
+#    "metadata"          → metadata file
+#    "ko"  + "count"     → KO functional counts
+#    "tax" + "count"     → taxonomic counts   (also matches "counts_wide" etc.)
+#    "count" alone       → fallback tax counts if no "ko" present
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
-# 2.2  Standardize column names
+all_files  <- list.files(data_dir, full.names = TRUE, recursive = FALSE)
+all_bases  <- basename(all_files)
+all_lower  <- tolower(all_bases)
+
+cat(sprintf("\n── Files found in: %s\n", data_dir))
+for (f in all_bases) cat(sprintf("   %s\n", f))
+
+assign_role <- function(name_lower) {
+  is_meta   <- grepl("metadata", name_lower)
+  is_ko     <- grepl("ko",       name_lower)
+  is_tax    <- grepl("tax",      name_lower)
+  is_counts <- grepl("count",    name_lower)
+  
+  if (is_meta)                return("metadata")
+  if (is_ko  && is_counts)    return("ko_counts")
+  if (is_tax && is_counts)    return("tax_counts")
+  if (is_counts && !is_ko)    return("tax_counts")   # fallback
+  return("unknown")
+}
+
+roles <- setNames(sapply(all_lower, assign_role), all_files)
+
+pick_role <- function(role, required = TRUE) {
+  matches <- all_files[roles == role]
+  if (length(matches) == 0) {
+    if (required) stop(sprintf("No file detected for role '%s' in: %s", role, data_dir))
+    warning(sprintf("No file detected for role '%s' — skipping.", role))
+    return(NULL)
+  }
+  if (length(matches) > 1) {
+    warning(sprintf("Multiple '%s' files found — using: %s",
+                    role, basename(matches[1])))
+  }
+  matches[1]
+}
+
+file_metadata <- pick_role("metadata",  required = TRUE)
+file_tax      <- pick_role("tax_counts", required = TRUE)
+file_ko       <- pick_role("ko_counts",  required = FALSE)
+
+cat("\n── Auto-detected file roles ─────────────────────────────────────────────\n")
+cat(sprintf("  %-12s → %s\n", "Metadata",   basename(file_metadata)))
+cat(sprintf("  %-12s → %s\n", "Tax counts", basename(file_tax)))
+cat(sprintf("  %-12s → %s\n", "KO counts",
+            if (!is.null(file_ko)) basename(file_ko) else "NOT FOUND (KO steps will be skipped)"))
+
+# ── 2.2  Extract study prefix from metadata filename ─────────────────────────
+
+study_prefix <- tolower(
+  strsplit(tools::file_path_sans_ext(basename(file_metadata)), "[_\\-\\.]")[[1]][1]
+)
+cat(sprintf("\n  Study prefix detected: '%s'\n", study_prefix))
+
+# ── 2.3  Format inference and smart reader ────────────────────────────────────
+
+detect_separator <- function(filepath, n_lines = 5) {
+  lines    <- readLines(filepath, n = n_lines, warn = FALSE)
+  n_tab    <- mean(stringr::str_count(lines, "\t"),  na.rm = TRUE)
+  n_comma  <- mean(stringr::str_count(lines, ","),   na.rm = TRUE)
+  n_semi   <- mean(stringr::str_count(lines, ";"),   na.rm = TRUE)
+  counts   <- c(tab = n_tab, comma = n_comma, semicolon = n_semi)
+  switch(names(which.max(counts)),
+         tab = "\t", comma = ",", semicolon = ";")
+}
+
+smart_read <- function(filepath) {
+  ext  <- tolower(tools::file_ext(filepath))
+  base <- basename(filepath)
+  cat(sprintf("  Reading %-55s", paste0("[.", ext, "] ")))
+  
+  df <- switch(ext,
+               csv = {
+                 readr::read_csv(filepath, show_col_types = FALSE)
+               },
+               tsv = {
+                 readr::read_tsv(filepath, show_col_types = FALSE)
+               },
+               txt = , tab = {
+                 sep <- detect_separator(filepath)
+                 sep_label <- switch(sep, "\t" = "TAB", "," = "COMMA", ";" = "SEMICOLON")
+                 df_tmp <- read.table(filepath,
+                                      header          = TRUE,
+                                      sep             = sep,
+                                      dec             = ".",
+                                      check.names     = FALSE,
+                                      stringsAsFactors = FALSE)
+                 cat(sprintf("(%s-delimited) ", sep_label))
+                 tibble::as_tibble(df_tmp)
+               },
+               xlsx = , xls = {
+                 if (!requireNamespace("readxl", quietly = TRUE)) install.packages("readxl")
+                 readxl::read_excel(filepath)
+               },
+               stop(sprintf("Unsupported file extension: .%s — file: %s", ext, base))
+  )
+  
+  cat(sprintf("→ %d rows × %d cols\n", nrow(df), ncol(df)))
+  df
+}
+
+cat("\n── Reading files ────────────────────────────────────────────────────────\n")
+tax_counts_df <- smart_read(file_tax)
+metadata_df   <- smart_read(file_metadata)
+ko_counts_df  <- if (!is.null(file_ko)) smart_read(file_ko) else NULL
+
+# ── 2.4  Validate tax counts structure ───────────────────────────────────────
+
+missing_tax_cols <- setdiff(tax_cols, colnames(tax_counts_df))
+if (length(missing_tax_cols) > 0) {
+  warning(sprintf(
+    "Tax counts file is missing expected taxonomy columns: %s\n  Found columns: %s",
+    paste(missing_tax_cols, collapse = ", "),
+    paste(colnames(tax_counts_df), collapse = ", ")
+  ))
+} else {
+  cat(sprintf("  ✔ Taxonomy columns present: %s\n", paste(tax_cols, collapse = ", ")))
+}
+
+# Validate KO counts structure
+if (!is.null(ko_counts_df)) {
+  if (!"ko" %in% tolower(colnames(ko_counts_df))) {
+    # Try to find a KO-like column and rename it
+    ko_candidate <- colnames(ko_counts_df)[1]
+    warning(sprintf("KO ID column 'ko' not found — renaming first column '%s' → 'ko'",
+                    ko_candidate))
+    colnames(ko_counts_df)[1] <- "ko"
+  }
+  cat(sprintf("  ✔ KO counts: %d features\n", nrow(ko_counts_df)))
+}
+
+# ── 2.5  Standardize column names in count tables ────────────────────────────
+#
+#  Removes artifacts introduced by R when reading numeric column names:
+#    • Leading "X" before digits  (e.g. "X12345"  → "12345")
+#    • ".counts." suffix          (e.g. "S01.counts." → "S01")
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 colnames(tax_counts_df) <- fix_id(colnames(tax_counts_df))
-colnames(ko_counts_df)  <- str_remove_all(colnames(ko_counts_df), "^X|\\.counts\\.$")
 
-# 2.3  Standardize metadata IDs
+if (!is.null(ko_counts_df)) {
+  colnames(ko_counts_df) <- fix_id(colnames(ko_counts_df))
+  colnames(ko_counts_df) <- stringr::str_remove_all(colnames(ko_counts_df), "\\.counts\\.$")
+}
+
+# ── 2.6  Auto-detect metadata columns ────────────────────────────────────────
+
+detect_sample_id_col <- function(meta_df, hint, count_df) {
+  if (!is.null(hint) && hint %in% colnames(meta_df)) return(hint)
+  
+  # Check known candidate names
+  candidates <- c("Sample_ID_FM_Pipeline", "SampleID", "Sample_ID",
+                  "sample_id", "sampleid", "Sample", "sample", "ID", "id")
+  match_name <- intersect(candidates, colnames(meta_df))
+  if (length(match_name) > 0) return(match_name[1])
+  
+  # Fallback: find column whose values best overlap count table column names
+  count_samples <- setdiff(colnames(count_df), tax_cols)
+  overlaps <- sapply(colnames(meta_df), function(col) {
+    length(intersect(as.character(meta_df[[col]]), count_samples))
+  })
+  if (max(overlaps) > 0) return(names(which.max(overlaps)))
+  
+  stop(paste0(
+    "Cannot auto-detect sample ID column.\n",
+    "  Available columns: ", paste(colnames(meta_df), collapse = ", "), "\n",
+    "  → Set: sample_id_col <- 'YourColumnName'"
+  ))
+}
+
+detect_group_col <- function(meta_df, hint) {
+  if (!is.null(hint) && hint %in% colnames(meta_df)) return(hint)
+  
+  candidates <- c("Group", "group", "Treatment", "treatment",
+                  "Condition", "condition", "Phenotype", "phenotype",
+                  "Class", "class", "Category", "category", "Status", "status")
+  match_name <- intersect(candidates, colnames(meta_df))
+  if (length(match_name) > 0) return(match_name[1])
+  
+  stop(paste0(
+    "Cannot auto-detect group column.\n",
+    "  Available columns: ", paste(colnames(meta_df), collapse = ", "), "\n",
+    "  → Set: group_col <- 'YourColumnName'"
+  ))
+}
+
+cat("\n── Detecting metadata column structure ──────────────────────────────────\n")
+detected_sid   <- detect_sample_id_col(metadata_df, sample_id_col, tax_counts_df)
+detected_grp   <- detect_group_col(metadata_df, group_col)
+
+cat(sprintf("  Sample ID column : '%s'\n", detected_sid))
+cat(sprintf("  Group column     : '%s'\n", detected_grp))
+
+# Rename to pipeline-standard names
+metadata_df <- metadata_df %>%
+  rename(Sample_ID_FM_Pipeline = all_of(detected_sid),
+         Group                 = all_of(detected_grp))
+
+# ── 2.7  Standardize sample IDs in metadata ───────────────────────────────────
+
 metadata_df <- metadata_df %>%
   mutate(Sample_ID_FM_Pipeline = fix_id(as.character(Sample_ID_FM_Pipeline)))
 
+# ── 2.8  Show and validate groups ────────────────────────────────────────────
+
+available_groups <- sort(unique(metadata_df$Group))
+
+cat("\n── Groups available in metadata ─────────────────────────────────────────\n")
+for (i in seq_along(available_groups)) {
+  n <- sum(metadata_df$Group == available_groups[i])
+  cat(sprintf("  [%d] %-40s n = %d\n", i, available_groups[i], n))
+}
+
+if (is.null(groups_to_compare)) {
+  groups_to_compare <- available_groups
+  cat(sprintf("\n  → groups_to_compare = NULL → using ALL %d groups\n",
+              length(groups_to_compare)))
+} else {
+  bad_groups <- setdiff(groups_to_compare, available_groups)
+  if (length(bad_groups) > 0) {
+    stop(sprintf(
+      "Groups not found in metadata: %s\nAvailable: %s\nCheck 'groups_to_compare' in the configuration block.",
+      paste(bad_groups,        collapse = ", "),
+      paste(available_groups,  collapse = ", ")
+    ))
+  }
+  cat(sprintf("\n  → Selected: %s\n", paste(groups_to_compare, collapse = " | ")))
+}
+
+cat(sprintf("\n✔ PART 2 complete — study: '%s'\n", study_prefix))
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PART 3 — INITIAL FILTERING
+# PART 3 — INITIAL FILTERING: intersect samples across all datasets
 # ─────────────────────────────────────────────────────────────────────────────
 
 metadata_filtered <- metadata_df %>%
-  filter(Group %in% c("Cp Challenge Control", "Symphiome"))
+  filter(Group %in% groups_to_compare)
 
 ids_meta <- metadata_filtered$Sample_ID_FM_Pipeline
 ids_tax  <- setdiff(colnames(tax_counts_df), tax_cols)
-ids_ko   <- setdiff(colnames(ko_counts_df),  "ko")
+ids_ko   <- if (!is.null(ko_counts_df)) setdiff(colnames(ko_counts_df), "ko") else character(0)
 
-cat("\nSamples in KO but missing in metadata:\n")
-print(setdiff(ids_ko,  ids_meta))
-cat("\nSamples in TAX but missing in metadata:\n")
-print(setdiff(ids_tax, ids_meta))
+cat("\n── Sample ID overlap diagnostics ────────────────────────────────────────\n")
 
-ids_common <- Reduce(intersect, list(ids_meta, ids_tax, ids_ko))
-cat(sprintf("\nCommon samples: %d\n", length(ids_common)))
+report_mismatch <- function(ids_a, ids_b, label_a, label_b) {
+  only_a <- setdiff(ids_a, ids_b)
+  only_b <- setdiff(ids_b, ids_a)
+  if (length(only_a) > 0)
+    cat(sprintf("  ⚠ In %-12s but not %-12s (%d): %s\n",
+                label_a, label_b, length(only_a),
+                paste(head(only_a, 5), collapse = ", ")))
+  if (length(only_b) > 0)
+    cat(sprintf("  ⚠ In %-12s but not %-12s (%d): %s\n",
+                label_b, label_a, length(only_b),
+                paste(head(only_b, 5), collapse = ", ")))
+  if (length(only_a) == 0 && length(only_b) == 0)
+    cat(sprintf("  ✔ %s ↔ %s: perfect match\n", label_a, label_b))
+}
 
+report_mismatch(ids_tax, ids_meta, "TAX",      "Metadata")
+if (length(ids_ko) > 0)
+  report_mismatch(ids_ko, ids_meta, "KO counts", "Metadata")
+
+# Compute intersection
+id_sources <- list(Metadata = ids_meta, TAX = ids_tax)
+if (length(ids_ko) > 0) id_sources[["KO"]] <- ids_ko
+
+ids_common <- Reduce(intersect, id_sources)
+
+cat(sprintf("\n  Common samples: %d\n", length(ids_common)))
+
+if (length(ids_common) == 0)
+  stop("No common samples found. Check that sample IDs are consistent across files.")
+
+# Filter all datasets to common samples
 tax_counts_df_filtrado <- tax_counts_df %>%
   select(all_of(tax_cols), all_of(ids_common))
 
-ko_counts_df_filtrado <- ko_counts_df %>%
-  select(ko, all_of(ids_common))
+ko_counts_df_filtrado <- if (!is.null(ko_counts_df)) {
+  ko_counts_df %>% select(ko, all_of(ids_common))
+} else {
+  NULL
+}
 
 metadata_filtered <- metadata_filtered %>%
   filter(Sample_ID_FM_Pipeline %in% ids_common) %>%
   arrange(match(Sample_ID_FM_Pipeline, ids_common))
+
+cat(sprintf("\n✔ PART 3 complete\n"))
+cat(sprintf("  Samples  : %d\n",  length(ids_common)))
+cat(sprintf("  Groups   : %s\n",  paste(groups_to_compare, collapse = " | ")))
+cat(sprintf("  TAX rows : %d\n",  nrow(tax_counts_df_filtrado)))
+if (!is.null(ko_counts_df_filtrado))
+  cat(sprintf("  KO rows  : %d\n", nrow(ko_counts_df_filtrado)))
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 4 — QC: HOST CONTAMINATION
 # ─────────────────────────────────────────────────────────────────────────────
