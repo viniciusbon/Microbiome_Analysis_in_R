@@ -59,6 +59,7 @@ library(ComplexHeatmap)
 library(circlize)
 library(ape)
 library(openxlsx)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ████  DATASET CONFIGURATION — ONLY THIS BLOCK NEEDS EDITING PER DATASET ████
 # ═════════════════════════════════════════════════════════════════════════════
@@ -69,6 +70,9 @@ data_dir <- "C:/Users/dti-/Documents/ANH/Simphyome_Analysis/Teste"
 # Groups to include in the analysis
 # Set to NULL to automatically use ALL groups found in the metadata file
 groups_to_compare <- c("Cp Challenge Control", "Symphiome")   # or NULL
+
+#Set animals age group that will be analysed
+animal_age <- 42
 
 # Metadata column names — set to NULL for auto-detection
 sample_id_col <- NULL    # column containing sample IDs
@@ -239,7 +243,9 @@ if (!is.null(ko_counts_df)) {
 }
 
 # ── 2.6  Auto-detect metadata columns ────────────────────────────────────────
-
+metadata_df <- metadata_df %>%
+  filter(age == animal_age)
+  
 detect_sample_id_col <- function(meta_df, hint, count_df) {
   if (!is.null(hint) && hint %in% colnames(meta_df)) return(hint)
   
