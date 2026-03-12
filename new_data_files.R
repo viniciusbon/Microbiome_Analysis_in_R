@@ -756,10 +756,298 @@ cat("• Prontos para análises comparativas entre grupos!\n")
 
 
 
+#Sample SWAP check
+# PCA PARA VERIFICAÇÃO DE TROCA DE AMOSTRAS (GRUPOS SELECIONADOS)
+
+cat("\n", rep("=", 60), "\n")
+cat("=== PCA: VERIFICAÇÃO DE TROCA DE AMOSTRAS (CONTROL vs GLYCODEX) ===\n")
+cat(rep("=", 60), "\n")
+
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(compositions)  # Para CLR transformation
+library(tibble)
+
+# Função para realizar PCA em dataset funcional
+perform_functional_pca <- function(dataset, dataset_name, group_var = "treatment") {
+  
+  if(is.null(dataset) || !group_var %in% names(dataset)) {
+    cat(paste("⚠", dataset_name, "não disponível ou sem coluna", group_var, "\n"))
+    return(NULL)
+  }
+  
+  cat(paste("🔍 Processando PCA para", dataset_name, "...\n"))
+  
+  # Verificar grupos disponíveis
+  available_groups <- unique(dataset[[group_var]])
+  cat(paste("   🎯 Grupos encontrados:", paste(available_groups, collapse = ", "), "\n"))
+  
+  # 1. Separar metadata das features funcionais
+  metadata_cols <- c("Sample_ID", "age", "treatment")
+  feature_cols <- setdiff(names(dataset), metadata_cols)
+  
+  # Extrair metadata e features
+  metadata_subset <- dataset[, metadata_cols]
+  features_data <- dataset[, feature_cols]
+  
+  # 2. Remover features com variância zero ou com muitos zeros
+  # Filtrar colunas com pelo menos alguma variabilidade
+  feature_vars <- apply(features_data, 2, var, na.rm = TRUE)
+  valid_features <- feature_vars > 0 & !is.na(feature_vars)
+  features_filtered <- features_data[, valid_features]
+  
+  cat(paste("   📊 Features:", ncol(features_data), "→", ncol(features_filtered), "(após filtragem)\n"))
+  
+  if(ncol(features_filtered) < 3) {
+    cat(paste("   ⚠ Poucas features válidas para PCA\n\n"))
+    return(NULL)
+  }
+  
+  # 3. CLR transformation (adicionar pseudocount se necessário)
+  # Adicionar pequeno valor para evitar zeros
+  features_clr_input <- features_filtered + 1e-6
+  
+  # Aplicar CLR transformation
+  features_clr <- compositions::clr(features_clr_input)
+  
+  # 4. Realizar PCA
+  pca_result <- prcomp(features_clr, center = TRUE, scale. = TRUE)
+  
+  # Calcular variância explicada
+  var_exp <- summary(pca_result)$importance["Proportion of Variance", 1:3] * 100
+  
+  # 5. Preparar dados para plot
+  pca_df <- as.data.frame(pca_result$x[, 1:3]) %>%
+    rownames_to_column("Row_Index") %>%
+    mutate(Sample_ID = metadata_subset$Sample_ID,
+           Group = metadata_subset[[group_var]],
+           age = metadata_subset$age) %>%
+    select(Sample_ID, Group, age, PC1, PC2, PC3)
+  
+  # 6. Criar gráfico PC1 vs PC2
+  p_pca_12 <- ggplot(pca_df,
+                     aes(x = PC1, y = PC2,
+                         color = Group,
+                         label = Sample_ID)) +
+    geom_point(size = 3.5, alpha = 0.85) +
+    geom_text_repel(
+      size = 2.5,
+      max.overlaps = 30,
+      show.legend = FALSE,
+      segment.color = "grey60"
+    ) +
+    stat_ellipse(
+      aes(group = Group),
+      type = "norm",
+      linetype = "dashed",
+      alpha = 0.5,
+      linewidth = 0.7
+    ) +
+    scale_color_manual(values = c("control" = "#E31A1C", "glycodex" = "#1F78B4")) +
+    labs(
+      title = paste("PCA — Sample Swap Check:", dataset_name, "(PC1 vs PC2)"),
+      subtitle = "Control vs Glycodex · CLR transformation",
+      x = sprintf("PC1 (%.1f%%)", var_exp[1]),
+      y = sprintf("PC2 (%.1f%%)", var_exp[2]),
+      color = "Treatment"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(color = "grey40"),
+      legend.position = "right"
+    )
+  
+  # 7. Criar gráfico PC1 vs PC3
+  p_pca_13 <- ggplot(pca_df,
+                     aes(x = PC1, y = PC3,
+                         color = Group,
+                         label = Sample_ID)) +
+    geom_point(size = 3.5, alpha = 0.85) +
+    geom_text_repel(
+      size = 2.5,
+      max.overlaps = 30,
+      show.legend = FALSE,
+      segment.color = "grey60"
+    ) +
+    stat_ellipse(
+      aes(group = Group),
+      type = "norm",
+      linetype = "dashed",
+      alpha = 0.5,
+      linewidth = 0.7
+    ) +
+    scale_color_manual(values = c("control" = "#E31A1C", "glycodex" = "#1F78B4")) +
+    labs(
+      title = paste("PCA — Sample Swap Check:", dataset_name, "(PC1 vs PC3)"),
+      subtitle = "Control vs Glycodex · CLR transformation",
+      x = sprintf("PC1 (%.1f%%)", var_exp[1]),
+      y = sprintf("PC3 (%.1f%%)", var_exp[3]),
+      color = "Treatment"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(color = "grey40"),
+      legend.position = "right"
+    )
+  
+  cat(paste("   ✅ PCA concluído - Variância explicada PC1-3:", 
+            paste(sprintf("%.1f%%", var_exp), collapse = ", "), "\n"))
+  
+  # Distribuição por grupo
+  group_counts <- table(pca_df$Group)
+  cat(paste("   📊 Distribuição:", paste(names(group_counts), group_counts, sep = "=", collapse = ", "), "\n\n"))
+  
+  return(list(
+    pca_result = pca_result,
+    pca_data = pca_df,
+    variance_explained = var_exp,
+    plot_pc12 = p_pca_12,
+    plot_pc13 = p_pca_13,
+    dataset_name = dataset_name,
+    group_distribution = group_counts
+  ))
+}
+
+# Lista dos datasets AGRUPADOS para análise PCA
+datasets_for_pca <- list(
+  "KO" = df_ko_grouped,
+  "AMR" = df_AMR_grouped,
+  "VF" = df_VF_grouped,
+  "CAZy" = df_CAZy_grouped,
+  "EC" = df_EC_grouped,
+  "COGs" = df_COGs_grouped
+)
+
+# Verificar disponibilidade dos datasets agrupados
+cat("🎯 Verificando datasets agrupados disponíveis:\n")
+for(name in names(datasets_for_pca)) {
+  dataset <- datasets_for_pca[[name]]
+  if(!is.null(dataset) && "treatment" %in% names(dataset)) {
+    dims <- dim(dataset)
+    groups <- table(dataset$treatment)
+    cat(paste("✅", name, ":", dims[1], "amostras |", 
+              paste(names(groups), groups, sep = "=", collapse = ", "), "\n"))
+  } else {
+    cat(paste("❌", name, ": não disponível\n"))
+  }
+}
+cat("\n")
+
+# Executar PCA para cada dataset agrupado
+pca_results_grouped <- list()
+
+for(dataset_name in names(datasets_for_pca)) {
+  pca_results_grouped[[dataset_name]] <- perform_functional_pca(
+    datasets_for_pca[[dataset_name]], 
+    dataset_name
+  )
+}
+
+# Exibir todos os gráficos PC1 vs PC2
+cat("📊 EXIBINDO GRÁFICOS PC1 vs PC2 (CONTROL vs GLYCODEX):\n")
+cat(rep("=", 50), "\n")
+
+for(dataset_name in names(pca_results_grouped)) {
+  if(!is.null(pca_results_grouped[[dataset_name]])) {
+    print(pca_results_grouped[[dataset_name]]$plot_pc12)
+    cat("\n")
+  }
+}
+
+
+# Resumo da variância explicada para grupos selecionados
+cat("📈 RESUMO DA VARIÂNCIA EXPLICADA (CONTROL vs GLYCODEX):\n")
+cat(rep("=", 60), "\n")
+
+variance_summary_grouped <- data.frame(
+  Dataset = character(),
+  PC1_percent = numeric(),
+  PC2_percent = numeric(),
+  PC3_percent = numeric(),
+  PC123_total = numeric(),
+  Control_n = integer(),
+  Glycodex_n = integer(),
+  stringsAsFactors = FALSE
+)
+
+for(dataset_name in names(pca_results_grouped)) {
+  if(!is.null(pca_results_grouped[[dataset_name]])) {
+    var_exp <- pca_results_grouped[[dataset_name]]$variance_explained
+    group_dist <- pca_results_grouped[[dataset_name]]$group_distribution
+    
+    variance_summary_grouped <- rbind(variance_summary_grouped, data.frame(
+      Dataset = dataset_name,
+      PC1_percent = round(var_exp[1], 1),
+      PC2_percent = round(var_exp[2], 1),
+      PC3_percent = round(var_exp[3], 1),
+      PC123_total = round(sum(var_exp[1:3]), 1),
+      Control_n = group_dist["control"],
+      Glycodex_n = group_dist["glycodex"]
+    ))
+  }
+}
+
+print(variance_summary_grouped)
+
+# Análise de separação entre grupos
+cat("\n🔍 ANÁLISE DE SEPARAÇÃO ENTRE GRUPOS:\n")
+cat(rep("=", 50), "\n")
+
+for(dataset_name in names(pca_results_grouped)) {
+  if(!is.null(pca_results_grouped[[dataset_name]])) {
+    pca_data <- pca_results_grouped[[dataset_name]]$pca_data
+    
+    # Calcular centróides dos grupos
+    centroids <- pca_data %>%
+      group_by(Group) %>%
+      summarise(
+        PC1_mean = mean(PC1),
+        PC2_mean = mean(PC2),
+        PC3_mean = mean(PC3),
+        .groups = 'drop'
+      )
+    
+    # Distância euclidiana entre centróides (PC1 vs PC2)
+    if(nrow(centroids) == 2) {
+      dist_pc12 <- sqrt((centroids$PC1_mean[1] - centroids$PC1_mean[2])^2 + 
+                          (centroids$PC2_mean[1] - centroids$PC2_mean[2])^2)
+      
+      cat(paste(dataset_name, "- Distância entre centróides (PC1-PC2):", 
+                round(dist_pc12, 2), "\n"))
+    }
+  }
+}
 
 
 
-
+for(dataset_name in names(pca_results_grouped)) {
+  if(!is.null(pca_results_grouped[[dataset_name]])) {
+    pca_data <- pca_results_grouped[[dataset_name]]$pca_data
+    
+    # Calcular distâncias do centróide por grupo
+    outliers_detected <- pca_data %>%
+      group_by(Group) %>%
+      mutate(
+        PC1_center = mean(PC1),
+        PC2_center = mean(PC2),
+        distance_from_center = sqrt((PC1 - PC1_center)^2 + (PC2 - PC2_center)^2),
+        is_outlier = distance_from_center > (mean(distance_from_center) + 2*sd(distance_from_center))
+      ) %>%
+      filter(is_outlier) %>%
+      select(Sample_ID, Group, distance_from_center)
+    
+    if(nrow(outliers_detected) > 0) {
+      cat(paste(dataset_name, "- Possíveis outliers:\n"))
+      print(outliers_detected)
+      cat("\n")
+    } else {
+      cat(paste(dataset_name, "- Nenhum outlier detectado\n"))
+    }
+  }
+}
 
 
 
