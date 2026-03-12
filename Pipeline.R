@@ -1,3 +1,4 @@
+.rs.restartR()
 #Step -by step
 # ============================================================
 # MICROBIOME ANALYSIS — COMPLETE REVISED CODE v001
