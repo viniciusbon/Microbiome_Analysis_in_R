@@ -1,452 +1,163 @@
 # ==============================================================================
-# PIPELINE ETL E ANÁLISE MULTIVARIADA DE MICROBIOMA - HAV1801
+# PIPELINE ETL DE MICROBIOMA - HAV1801
 # ==============================================================================
 
 # Carregar pacotes necessários
-library(tidyverse)
-library(janitor)
-library(ggrepel)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(janitor)
+  library(phyloseq)
+  library(vegan)
+})
 
 # ==============================================================================
-# 1. SETUP E FILTRAGEM DE METADADOS
+# 1. CARREGAMENTO E LIMPEZA DE METADADOS
 # ==============================================================================
-cat("1. Carregando e limpando metadados...\n")
+cat("1. Processando metadados...\n")
 
-target_age <- "d42"
-target_groups <- c("control", "m2-102")
-
-# Lendo metadados primeiro e limpando
+# Lemos os metadados, limpamos nomes de colunas e ajustamos os IDs
+# O ID original tem pontos e um underline no final (ex: HAV1801.12.10.18_1A_)
 metadata <- read_tsv("HAV1801_meta.txt", show_col_types = FALSE) %>% 
   clean_names() %>% 
-  # Corrige os IDs: substitui pontos por hífens, remove underscore no final
-  mutate(sample_clean = str_replace_all(sample, "\\.", "-"),
-         sample_clean = str_remove(sample_clean, "_$")) %>% 
-  select(sample_clean, treatment, age_group, everything(), -sample) %>%
-  # Aplica os filtros de desenho experimental
-  filter(age_group == target_age,
-         treatment %in% target_groups)
+  mutate(
+    sample_id = str_replace_all(sample, "\\.", "-"),
+    sample_id = str_remove(sample_id, "_$")
+  ) %>% 
+  # Manter apenas as colunas de interesse para simplificar os joins depois
+  select(sample_id, treatment, age)
 
-# Extrai o vetor de amostras válidas para os próximos passos
-valid_samples <- metadata$sample_clean
-
-cat("Amostras retidas após filtro do metadado:", length(valid_samples), "\n\n")
+# Vetor com IDs válidos que existem no metadado
+valid_samples <- metadata$sample_id
+cat("Total de amostras no metadado:", length(valid_samples), "\n\n")
 
 # ==============================================================================
-# 2. FUNÇÃO DE PROCESSAMENTO UNIVERSAL (Gera Formato Longo)
+# 2. FUNÇÃO CORE DO ETL PARA PADRONIZAÇÃO
 # ==============================================================================
-# Esta função normaliza qualquer formato (Longo ou Largo) para um padrão analítico
-process_file <- function(path, type_label) {
-  df_raw <- read_tsv(path, show_col_types = FALSE)
-  if (ncol(df_raw) < 2) return(NULL)
+# Esta função carrega qualquer arquivo do SevenBridges, avalia a estrutura,
+# padroniza para o formato longo e anexa o treatment e age.
+
+process_sb_data <- function(filepath, feature_col_name = "Gene_Name") {
   
+  if (!file.exists(filepath)) {
+    warning(paste("Arquivo não encontrado:", filepath))
+    return(NULL)
+  }
+  
+  df_raw <- read_tsv(filepath, show_col_types = FALSE)
+  
+  # VERIFICAÇÃO 1: Formato Longo (Ex: VF e AMR vêm com Sample_ID e readCount)
   if ("Sample_ID" %in% colnames(df_raw)) {
-    # FORMATO LONGO (VF, AMR)
-    df_ready <- df_raw %>% 
-      rename(sample_clean = Sample_ID, count = readCount, feature = Gene_Name) %>% 
-      filter(sample_clean %in% valid_samples) %>% 
-      group_by(sample_clean, feature) %>% 
+    df_clean <- df_raw %>% 
+      rename(sample_id = Sample_ID, feature = all_of(feature_col_name), count = readCount) %>% 
+      select(sample_id, feature, count) %>% 
+      # Algumas contagens podem vir duplicadas para o mesmo gene dependendo do alinhamento
+      group_by(sample_id, feature) %>% 
       summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
     
   } else {
-    # FORMATO LARGO (Taxonomia, KO, EC, CAZy, COGs)
+    # VERIFICAÇÃO 2: Formato Largo (Ex: Taxonomia, KO, EC, CAZy, COGs)
     
-    # Se for taxonomia, unifica os 7 níveis em uma única coluna 'feature'
-    if (all(c("k", "p", "c", "o", "f", "g", "s") %in% colnames(df_raw))) {
+    # Se for taxonomia, unir as 7 colunas em uma única string
+    tax_cols <- c("k", "p", "c", "o", "f", "g", "s")
+    if (all(tax_cols %in% colnames(df_raw))) {
       df_raw <- df_raw %>% 
-        unite("feature", k:s, sep = "|")
+        unite("feature", all_of(tax_cols), sep = "|", remove = TRUE)
     } else {
-      # Para os demais (KO, EC, etc), renomeia a 1ª coluna
+      # Para os outros (KO, EC, etc), a primeira coluna é a feature
       colnames(df_raw)[1] <- "feature"
     }
     
-    # Agora pivotamos com segurança
-    df_ready <- df_raw %>% 
-      pivot_longer(cols = -feature, names_to = "sample_clean", values_to = "count") %>% 
-      filter(sample_clean %in% valid_samples) %>% 
-      group_by(sample_clean, feature) %>% 
-      summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+    # Pivotar o dataframe largo para o formato longo
+    df_clean <- df_raw %>% 
+      pivot_longer(
+        cols = -feature, 
+        names_to = "sample_id", 
+        values_to = "count"
+      ) %>% 
+      # Remover NAs ou contagens zeradas para deixar o objeto leve
+      filter(count > 0)
   }
   
-  # Adiciona os metadados
-  df_ready %>% 
-    inner_join(metadata, by = "sample_clean") %>% 
-    mutate(data_type = type_label)
+  # APLICAR METADADOS E FILTRAR
+  df_final <- df_clean %>% 
+    # Filtrar removendo amostras que NÃO estão no metadado
+    filter(sample_id %in% valid_samples) %>% 
+    # Adicionar metadados (treatment e age)
+    left_join(metadata, by = "sample_id")
+  
+  return(df_final)
 }
 
 # ==============================================================================
-# 3. EXECUÇÃO DO PROCESSAMENTO (Para Estatísticas Gerais)
+# 3. EXECUÇÃO DO ETL EM TODOS OS ARQUIVOS
 # ==============================================================================
-cat("2. Processando arquivos de contagem...\n")
+cat("2. Aplicando pipeline ETL nos arquivos...\n")
 
-tax_ready  <- process_file("hav1801_tax_counts.tsv", "Taxonomy")
-ko_ready   <- process_file("hav1801_fun_KO_counts.txt", "KO")
-ec_ready   <- process_file("hav1801_fun_EC_count.txt", "EC")
-cazy_ready <- process_file("hav1801_fun_CAZy_counts.txt", "CAZy")
-cogs_ready <- process_file("hav1801_fun_COGs_count.txt", "COGs")
-vf_ready   <- process_file("hav1801_fun_VF_counts.tsv", "VF")
-amr_ready  <- process_file("hav1801_fun_AMR_counts.tsv", "AMR")
+# Processando um a um. Note que para VF e AMR precisamos indicar o nome da coluna de feature.
+dados_tax  <- process_sb_data("hav1801_tax_counts.tsv")
+dados_ko   <- process_sb_data("hav1801_fun_KO_counts.txt")
+dados_ec   <- process_sb_data("hav1801_fun_EC_count.txt")
+dados_cazy <- process_sb_data("hav1801_fun_CAZy_counts.txt")
+dados_cogs <- process_sb_data("hav1801_fun_COGs_count.txt")
+dados_vf   <- process_sb_data("hav1801_fun_VF_counts.tsv", feature_col_name = "VF_Name")
+dados_amr  <- process_sb_data("hav1801_fun_AMR_counts.tsv", feature_col_name = "Gene_Name")
 
-# Resumo Estatístico Exemplo (Taxonomia)
-stats_summary <- tax_ready %>%
-  group_by(treatment) %>%
-  summarise(
-    n_amostras = n_distinct(sample_clean),
-    total_features = n_distinct(feature),
-    media_leituras = mean(count),
-    min_leituras = min(count),
-    max_leituras = max(count)
-  )
+cat("ETL concluído. Dados padronizados em formato longo criados.\n\n")
 
-print("--- Resumo Estatístico (Taxonomia) ---")
-print(stats_summary)
+# Exemplo de visualização da estrutura padronizada (usando taxonomia):
+# print(head(dados_tax))
+
 
 # ==============================================================================
-# 4. PREPARAÇÃO FORMATO WIDE PARA TAXONOMIA (Necessário para QC e PCA)
+# 4. PREPARAÇÃO PARA DIVERSIDADE ALFA E BETA
 # ==============================================================================
-cat("\n3. Preparando matriz de Taxonomia para QC e PCA...\n")
+# Para rodar diversidade, você precisa que os dados retornem ao formato de matriz (Largo).
+# Aqui está uma função utilitária para transformar qualquer um dos dataframes longos 
+# gerados acima em um objeto 'phyloseq' (ideal) ou 'matriz para vegan'.
 
-tax_raw <- read_tsv("hav1801_tax_counts.tsv", show_col_types = FALSE)
-tax_cols <- c("k", "p", "c", "o", "f", "g", "s")
-
-# Mantém colunas taxonômicas e apenas as amostras filtradas do metadado
-cols_to_keep <- intersect(colnames(tax_raw), valid_samples)
-tax_wide_filtered <- tax_raw %>%
-  select(all_of(tax_cols), all_of(cols_to_keep))
-
-# ==============================================================================
-# 5. CONTROLE DE QUALIDADE: CONTAMINAÇÃO PELO HOSPEDEIRO
-# ==============================================================================
-# 5.1 Leituras do hospedeiro (Gallus gallus)
-host_counts <- tax_wide_filtered %>%
-  filter(s == "Gallus_gallus") %>%
-  select(-all_of(tax_cols)) %>%
-  pivot_longer(everything(), names_to = "sample_clean", values_to = "Host_Reads")
-
-# Se não houver Gallus_gallus, cria a tabela zerada
-if(nrow(host_counts) == 0) {
-  host_counts <- tibble(sample_clean = cols_to_keep, Host_Reads = 0)
+create_phyloseq_object <- function(df_long, meta_df) {
+  
+  # 1. Transformar contagens de volta para formato largo (matriz de abundância)
+  otu_matrix <- df_long %>%
+    select(sample_id, feature, count) %>%
+    pivot_wider(names_from = sample_id, values_from = count, values_fill = 0) %>%
+    column_to_rownames("feature") %>%
+    as.matrix()
+  
+  # 2. Preparar metadados
+  meta_df_rownames <- meta_df %>% 
+    column_to_rownames("sample_id")
+  
+  # 3. Montar objeto Phyloseq
+  OTU <- otu_table(otu_matrix, taxa_are_rows = TRUE)
+  SAMP <- sample_data(meta_df_rownames)
+  
+  physeq_obj <- phyloseq(OTU, SAMP)
+  return(physeq_obj)
 }
 
-# 5.2 Leituras totais por amostra
-total_reads <- tax_wide_filtered %>%
-  select(-all_of(tax_cols)) %>%
-  summarise(across(everything(), sum)) %>%
-  pivot_longer(everything(), names_to = "sample_clean", values_to = "Total_Reads")
+# Exemplo: Criar o objeto Phyloseq para a taxonomia e calcular diversidade
+physeq_tax <- create_phyloseq_object(dados_tax, metadata)
 
-# 5.3 Porcentagem de contaminação
-host_contamination_df <- inner_join(host_counts, total_reads, by = "sample_clean") %>%
-  filter(Total_Reads > 0) %>%
-  mutate(Host_Pct = (Host_Reads / Total_Reads) * 100)
+# Cálculo de Alfa Diversidade (Shannon, Simpson) - O pacote tratará automaticamente o formato.
+# plot_richness(physeq_tax, x = "treatment", measures = c("Shannon", "Simpson")) + 
+#   geom_boxplot() + theme_minimal()
 
-# 5.4 Filtro de amostras (Threshold)
-host_threshold <- 20
+cat("Objeto Phyloseq criado com sucesso. Você está pronto para análises estatísticas!\n")
 
-samples_to_keep <- host_contamination_df %>%
-  filter(Host_Pct < host_threshold) %>%
-  pull(sample_clean)
 
-# Matriz final sem o hospedeiro e sem as amostras muito contaminadas
-tax_counts_no_host <- tax_wide_filtered %>%
-  filter(s != "Gallus_gallus") %>%
-  select(all_of(tax_cols), all_of(samples_to_keep))
+# Visualizar a Diversidade Alfa
+plot_richness(physeq_tax, 
+              x = "treatment", 
+              measures = c("Shannon", "Simpson", "Chao1"), 
+              color = "treatment") + 
+  geom_boxplot(alpha = 0.7) + 
+  geom_point(size = 2, alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Diversidade Alfa por Tratamento", y = "Índice de Diversidade")
 
-cat(sprintf("QC Hospedeiro | Threshold: %d%% | Removidas: %d | Restantes: %d\n",
-            host_threshold,
-            length(cols_to_keep) - length(samples_to_keep),
-            length(samples_to_keep)))
+# Extrair os números exatos para fazer estatística (ex: Kruskal-Wallis ou ANOVA)
+alfa_df <- estimate_richness(physeq_tax, measures = c("Shannon", "Simpson", "Chao1"))
+# Juntar com seus metadados para análises estatísticas
+alfa_stats <- merge(alfa_df, sample_data(physeq_tax), by = "row.names")
 
-# ==============================================================================
-# 6. CONTROLE DE QUALIDADE: FILTRO DE PREVALÊNCIA E ABUNDÂNCIA
-# ==============================================================================
-min_rel_abund  <- 0.0001   # 0.01% abundância relativa
-min_prevalence <- 0.10     # presente em pelo menos 10% das amostras
-
-# Separa apenas a matriz numérica
-tax_count_mat <- tax_counts_no_host %>% select(-all_of(tax_cols)) %>% as.matrix()
-
-# Calcula a abundância relativa e a prevalência
-tax_rel_mat <- sweep(tax_count_mat, 2, colSums(tax_count_mat), "/")
-tax_prevalence <- rowMeans(tax_rel_mat >= min_rel_abund, na.rm = TRUE)
-
-# Aplica o filtro
-tax_rows_pass <- tax_prevalence >= min_prevalence
-tax_counts_final_qc <- tax_counts_no_host[tax_rows_pass, ]
-
-cat(sprintf("QC Taxonomia | Features originais: %d | Após filtro: %d | Removidas: %d\n\n",
-            length(tax_rows_pass),
-            sum(tax_rows_pass),
-            sum(!tax_rows_pass)))
-
-# ==============================================================================
-# 7. ANÁLISE DE COMPONENTES PRINCIPAIS (PCA) COM CLR
-# ==============================================================================
-cat("4. Calculando Transformação CLR e PCA...\n")
-
-# 7.1 Preparar matriz focada no nível de espécie
-pca_matrix <- tax_counts_final_qc %>%
-  filter(!is.na(s)) %>%                     
-  select(-all_of(tax_cols)) %>%             
-  filter(rowSums(.) > 0)                    
-
-# Transpor (Amostras nas linhas, Espécies nas colunas)
-pca_matrix_t <- t(pca_matrix)
-
-# 7.2 Transformação CLR (Centered Log-Ratio)
-pca_clr <- pca_matrix_t + 0.5                                      # Pseudocount
-pca_clr <- sweep(pca_clr, 1, rowSums(pca_clr), "/")                # Abundância relativa
-pca_clr <- log(pca_clr) - rowMeans(log(pca_clr))                   # CLR
-
-# 7.3 Rodar PCA
-pca_result   <- prcomp(pca_clr, center = TRUE, scale. = FALSE)
-var_exp      <- summary(pca_result)$importance[2, ] * 100        
-
-# 7.4 Construir Dataframe para o Plot (Juntando dados do PCA e Metadados)
-pca_df <- as.data.frame(pca_result$x[, 1:3]) %>%
-  rownames_to_column("sample_clean") %>%
-  left_join(
-    metadata %>% select(sample_clean, treatment),
-    by = "sample_clean"
-  )
-
-# 7.5 Plot: PC1 vs PC2
-p_pca_12 <- ggplot(pca_df, 
-                   aes(x = PC1, y = PC2, color = treatment, label = sample_clean)) +
-  geom_point(size = 3.5, alpha = 0.85) +
-  geom_text_repel(size = 3, max.overlaps = 30, show.legend = FALSE, segment.color = "grey60") +
-  stat_ellipse(aes(group = treatment), type = "norm", linetype = "dashed", alpha = 0.5, linewidth = 0.7) +
-  scale_color_brewer(palette = "Set1") +
-  labs(
-    title    = "PCA — Distribuição das Amostras (PC1 vs PC2)",
-    subtitle = "Nível de Espécie · Transformação CLR",
-    x        = sprintf("PC1 (%.1f%%)", var_exp[1]),
-    y        = sprintf("PC2 (%.1f%%)", var_exp[2]),
-    color    = "Tratamento"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(plot.title = element_text(face = "bold"),
-        legend.position = "right")
-
-# Exibir o gráfico
-print(p_pca_12)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5.8 Biplot — Amostras + Loadings de Espécies (Vetores)
-# ─────────────────────────────────────────────────────────────────────────────
-
-n_arrows <- 15   # Número de top-features (espécies) para exibir como setas
-
-# 1. Recuperar nomes das espécies garantindo o mesmo alinhamento do pca_matrix
-species_labels_biplot <- tax_counts_final_qc %>%
-  filter(!is.na(s)) %>%
-  # Calcula a soma apenas nas colunas numéricas de amostra
-  mutate(count_sum = rowSums(select(., -all_of(tax_cols)))) %>%
-  filter(count_sum > 0) %>%
-  mutate(species_label = make.unique(paste(g, s, sep = "|"))) %>%
-  pull(species_label)
-
-# Atribuir os nomes como rownames da matriz de rotação (loadings)
-rownames(pca_result$rotation) <- species_labels_biplot
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5.8.1 Helper — Construir data frame de loadings escalonados
-# ─────────────────────────────────────────────────────────────────────────────
-get_scaled_loadings <- function(rotation, scores_df, pc_x, pc_y, n_top, scale_pct = 0.65) {
-  
-  load_df <- as.data.frame(rotation[, c(pc_x, pc_y)]) %>%
-    setNames(c("PCx", "PCy")) %>%
-    rownames_to_column("species") %>%
-    mutate(
-      species_short = sub("^[^|]*\\|", "", species),   # Mantém apenas a parte da espécie após o "|"
-      loading_mag   = sqrt(PCx^2 + PCy^2)
-    ) %>%
-    arrange(desc(loading_mag)) %>%
-    head(n_top)
-  
-  # Seleciona apenas as colunas numéricas de scores para calcular o range máximo
-  scores_numeric <- scores_df %>% select(all_of(c(pc_x, pc_y)))
-  score_range    <- max(abs(scores_numeric))
-  loading_range  <- max(abs(load_df[, c("PCx", "PCy")]))
-  
-  # Fator de escala para as setas atingirem scale_pct do gráfico de dispersão
-  sf <- (score_range / loading_range) * scale_pct
-  
-  load_df %>%
-    mutate(PCx_sc = PCx * sf,
-           PCy_sc = PCy * sf)
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5.8.2 Helper — Construir ggplot do Biplot
-# ─────────────────────────────────────────────────────────────────────────────
-make_biplot <- function(scores_df, loadings_scaled, pc_x_col, pc_y_col, x_label, y_label, title, subtitle) {
-  
-  ggplot() +
-    # ── Pontos das Amostras ──────────────────────────────────────────────────
-    geom_point(
-      data  = scores_df,
-      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], color = treatment),
-      size  = 3.2, alpha = 0.82
-    ) +
-    geom_text_repel(
-      data          = scores_df,
-      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], color = treatment, label = sample_clean),
-      size          = 2.6,
-      max.overlaps  = 20,
-      show.legend   = FALSE,
-      segment.color = "grey60",
-      segment.size  = 0.3
-    ) +
-    # ── Elipses de Confiança ─────────────────────────────────────────────────
-    stat_ellipse(
-      data      = scores_df,
-      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], group = treatment, color = treatment),
-      type      = "norm",
-      linetype  = "dashed",
-      alpha     = 0.5,
-      linewidth = 0.7
-    ) +
-    # ── Setas dos Vetores (Loadings) ─────────────────────────────────────────
-    geom_segment(
-      data      = loadings_scaled,
-      aes(x = 0, y = 0, xend = PCx_sc, yend = PCy_sc),
-      arrow     = arrow(length = unit(0.22, "cm"), type = "closed"),
-      color     = "grey20",
-      linewidth = 0.45,
-      alpha     = 0.80
-    ) +
-    # ── Rótulos das Setas (Espécies) ─────────────────────────────────────────
-    geom_text_repel(
-      data          = loadings_scaled,
-      aes(x = PCx_sc, y = PCy_sc, label = species_short),
-      size          = 2.5,
-      color         = "grey10",
-      fontface      = "italic",
-      max.overlaps  = 40,
-      segment.color = "grey65",
-      segment.size  = 0.25,
-      box.padding   = 0.35,
-      force         = 1.5
-    ) +
-    scale_color_brewer(palette = "Set1") +
-    labs(
-      title    = title,
-      subtitle = subtitle,
-      x        = x_label,
-      y        = y_label,
-      color    = "Tratamento"
-    ) +
-    theme_bw(base_size = 13) +
-    theme(
-      plot.title      = element_text(face = "bold"),
-      plot.subtitle   = element_text(color = "grey40", size = 10),
-      legend.position = "right"
-    )
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5.8.3 Gerar e Exibir Biplot — PC1 vs PC2
-# ─────────────────────────────────────────────────────────────────────────────
-load_scaled_12 <- get_scaled_loadings(
-  rotation  = pca_result$rotation,
-  scores_df = pca_df,
-  pc_x      = "PC1",
-  pc_y      = "PC2",
-  n_top     = n_arrows
-)
-
-p_biplot_12 <- make_biplot(
-  scores_df       = pca_df,
-  loadings_scaled = load_scaled_12,
-  pc_x_col        = "PC1",
-  pc_y_col        = "PC2",
-  x_label         = sprintf("PC1 (%.1f%%)", var_exp[1]),
-  y_label         = sprintf("PC2 (%.1f%%)", var_exp[2]),
-  title           = "PCA Biplot — PC1 vs PC2",
-  subtitle        = sprintf("Nível de Espécie · Transformação CLR · Top %d vetores", n_arrows)
-)
-
-print(p_biplot_12)
-
-# 5.7  Scree plot (optional — how many PCs matter?) ────────────────────────────
-
-scree_df <- data.frame(
-  PC      = seq_along(var_exp),
-  Var_Pct = var_exp
-)
-
-p_scree <- ggplot(scree_df[1:15, ], aes(x = PC, y = Var_Pct)) +
-  geom_col(fill = "steelblue", alpha = 0.8) +
-  geom_line(color = "darkred", linewidth = 0.8) +
-  geom_point(color = "darkred", size = 2) +
-  labs(
-    title = "Scree Plot — Variance Explained per PC",
-    x     = "Principal Component",
-    y     = "Variance Explained (%)"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(plot.title = element_text(face = "bold"))
-
-print(p_scree)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6.5 Sequencing depth check — before rarefaction
-# ─────────────────────────────────────────────────────────────────────────────
-# Note: Depth is calculated directly from the clean count matrix (tax_counts_final_qc),
-# bypassing the need for a phyloseq object at this specific QC stage.
-
-# Calculate total reads per sample (excluding the 7 taxonomy columns)
-depths <- colSums(tax_counts_final_qc %>% select(-all_of(tax_cols)))
-
-depth_df <- data.frame(
-  sample_clean = names(depths),
-  Depth        = depths
-) %>%
-  left_join(
-    metadata %>% select(sample_clean, treatment),
-    by = "sample_clean"
-  ) %>%
-  arrange(Depth)
-
-# Validate join
-if (any(is.na(depth_df$treatment))) {
-  warning("Depth join failed for some samples — check sample IDs!")
-  print(depth_df %>% filter(is.na(treatment)))
-} else {
-  cat("✔ Depth join OK — all samples matched to metadata\n")
-}
-
-rare_depth <- min(depth_df$Depth)
-
-cat(sprintf(
-  "Rarefaction depth (minimum): %d  |  Max: %d  |  Median: %.0f\n",
-  rare_depth, max(depth_df$Depth), median(depth_df$Depth)
-))
-
-p_depth <- ggplot(depth_df,
-                  aes(x = reorder(sample_clean, Depth),
-                      y = Depth,
-                      fill = treatment)) +
-  geom_col(alpha = 0.85) +
-  geom_hline(yintercept = rare_depth,
-             color = "darkred", linetype = "dashed", linewidth = 0.8) +
-  annotate("text",
-           x     = 1,
-           y     = rare_depth,
-           label = sprintf("Rarefaction depth: %d", rare_depth),
-           vjust = -0.5, hjust = 0, color = "darkred", size = 3.5) +
-  scale_fill_brewer(palette = "Set1") +
-  labs(
-    title    = "Sequencing Depth per Sample",
-    subtitle = "Red dashed line = rarefaction threshold (minimum depth)",
-    x        = "Sample",
-    y        = "Read Count",
-    fill     = "Treatment"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold"),
-    plot.subtitle = element_text(color = "grey40"),
-    axis.text.x   = element_text(angle = 90, hjust = 1, vjust = 0.5)
-  )
-
-print(p_depth)
