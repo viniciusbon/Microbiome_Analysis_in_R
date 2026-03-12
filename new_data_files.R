@@ -306,60 +306,151 @@ cat("\n✅ PADRONIZAÇÃO CONCLUÍDA!\n")
 cat("- Todos os datasets transpostos estão no formato: amostras como linhas, features como colunas\n")
 cat("- Sample_IDs padronizados no formato: HAV1801-12-10-18_10A\n")
 cat("- Primeira coluna = Sample_ID em todos os datasets\n")
-#Adicionar coluna grupo e idadede acordo com metada (match case)
 
 
+# FASE 4 - FILTRAGEM DE AMOSTRAS USANDO METADATA COMO REFERÊNCIA
 
-#Filtrar de acordo com metada 
+cat("\n", rep("=", 60), "\n")
+cat("=== FASE 4: FILTRAGEM DE AMOSTRAS USANDO METADATA ===\n")
+cat(rep("=", 60), "\n")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+if(is.null(df_meta)) {
+  cat("⚠ ERRO: df_meta não encontrado. Impossível prosseguir com a filtragem.\n")
+} else {
+  
+  # Obter a lista de Sample_IDs de referência do metadata
+  reference_sample_ids <- df_meta$Sample_ID
+  cat("📋 Sample_IDs de referência no metadata:", length(reference_sample_ids), "amostras\n")
+  cat("Primeiros exemplos:", paste(head(reference_sample_ids, 5), collapse = ", "), "\n\n")
+  
+  # Função para filtrar datasets usando Sample_IDs de referência
+  filter_samples_by_metadata <- function(dataset, dataset_name, reference_ids) {
+    if(is.null(dataset) || !"Sample_ID" %in% names(dataset)) {
+      cat(paste("⚠", dataset_name, "- Dataset não encontrado ou sem coluna Sample_ID\n"))
+      return(NULL)
+    }
+    
+    # Amostras antes da filtragem
+    original_samples <- nrow(dataset)
+    original_sample_ids <- dataset$Sample_ID
+    
+    # Filtrar apenas amostras que estão no metadata
+    filtered_dataset <- dataset %>%
+      filter(Sample_ID %in% reference_ids)
+    
+    # Amostras após filtragem
+    filtered_samples <- nrow(filtered_dataset)
+    kept_sample_ids <- filtered_dataset$Sample_ID
+    
+    # Amostras removidas
+    removed_samples <- original_samples - filtered_samples
+    removed_sample_ids <- setdiff(original_sample_ids, kept_sample_ids)
+    
+    # Relatório
+    cat(paste("📊", dataset_name, ":\n"))
+    cat(paste("   • Amostras originais:", original_samples, "\n"))
+    cat(paste("   • Amostras mantidas:", filtered_samples, "\n"))
+    cat(paste("   • Amostras removidas:", removed_samples, "\n"))
+    
+    if(removed_samples > 0) {
+      cat("   • Sample_IDs removidos:", paste(head(removed_sample_ids, 5), collapse = ", "))
+      if(length(removed_sample_ids) > 5) {
+        cat(paste(" (e mais", length(removed_sample_ids) - 5, "...)"))
+      }
+      cat("\n")
+    }
+    cat("\n")
+    
+    return(filtered_dataset)
+  }
+  
+  cat("🔍 Iniciando filtragem dos datasets funcionais...\n\n")
+  
+  # Aplicar filtragem a todos os datasets funcionais
+  df_ko_filtered <- filter_samples_by_metadata(df_ko, "df_ko", reference_sample_ids)
+  df_AMR_filtered <- filter_samples_by_metadata(df_AMR, "df_AMR", reference_sample_ids)
+  df_VF_filtered <- filter_samples_by_metadata(df_VF, "df_VF", reference_sample_ids)
+  df_CAZy_filtered <- filter_samples_by_metadata(df_CAZy, "df_CAZy", reference_sample_ids)
+  df_EC_filtered <- filter_samples_by_metadata(df_EC, "df_EC", reference_sample_ids)
+  df_COGs_filtered <- filter_samples_by_metadata(df_COGs, "df_COGs", reference_sample_ids)
+  
+  # Substituir os datasets originais pelos filtrados
+  df_ko <- df_ko_filtered
+  df_AMR <- df_AMR_filtered
+  df_VF <- df_VF_filtered
+  df_CAZy <- df_CAZy_filtered
+  df_EC <- df_EC_filtered
+  df_COGs <- df_COGs_filtered
+  
+  # VERIFICAÇÃO FINAL PÓS-FILTRAGEM
+  cat(rep("=", 50), "\n")
+  cat("=== VERIFICAÇÃO FINAL PÓS-FILTRAGEM ===\n")
+  cat(rep("=", 50), "\n")
+  
+  # Lista dos datasets filtrados
+  datasets_filtered <- list(
+    "META" = df_meta,
+    "KO" = df_ko,
+    "AMR" = df_AMR,
+    "VF" = df_VF,
+    "CAZy" = df_CAZy,
+    "EC" = df_EC,
+    "COGs" = df_COGs
+  )
+  
+  # Relatório final
+  for(name in names(datasets_filtered)) {
+    if(!is.null(datasets_filtered[[name]])) {
+      dims <- dim(datasets_filtered[[name]])
+      cat(paste("✅", name, ":", dims[1], "amostras x", dims[2], "variáveis\n"))
+    } else {
+      cat(paste("❌", name, ": Dataset não disponível\n"))
+    }
+  }
+  
+  # Verificação de consistência final das amostras
+  cat("\n🔍 Verificação de consistência final das amostras:\n")
+  
+  sample_counts <- list()
+  for(name in names(datasets_filtered)) {
+    if(!is.null(datasets_filtered[[name]]) && "Sample_ID" %in% names(datasets_filtered[[name]])) {
+      sample_counts[[name]] <- length(datasets_filtered[[name]]$Sample_ID)
+    }
+  }
+  
+  if(length(unique(sample_counts)) == 1) {
+    cat("✅ PERFEITO! Todos os datasets têm o mesmo número de amostras:", unique(sample_counts), "\n")
+  } else {
+    cat("⚠ ATENÇÃO! Números diferentes de amostras entre datasets:\n")
+    for(name in names(sample_counts)) {
+      cat(paste("  ", name, ":", sample_counts[[name]], "amostras\n"))
+    }
+  }
+  
+  # Verificação se todas as amostras são as mesmas
+  if(!is.null(df_meta) && length(datasets_filtered) > 1) {
+    reference_ids <- sort(df_meta$Sample_ID)
+    all_consistent <- TRUE
+    
+    for(name in names(datasets_filtered)) {
+      if(name != "META" && !is.null(datasets_filtered[[name]]) && "Sample_ID" %in% names(datasets_filtered[[name]])) {
+        current_ids <- sort(datasets_filtered[[name]]$Sample_ID)
+        if(!identical(reference_ids, current_ids)) {
+          all_consistent <- FALSE
+          cat(paste("⚠", name, "tem Sample_IDs diferentes do metadata\n"))
+        }
+      }
+    }
+    
+    if(all_consistent) {
+      cat("✅ Todos os datasets têm exatamente as mesmas amostras do metadata!\n")
+    }
+  }
+  
+  cat("\n", rep("🎉", 20), "\n")
+  cat("✅ FASE 4 CONCLUÍDA COM SUCESSO!\n")
+  cat("• Todos os datasets foram filtrados usando o metadata como referência\n")
+  cat("• Apenas amostras presentes no metadata foram mantidas\n")
+  cat("• Datasets prontos para análises funcionais integradas\n")
+  cat(rep("🎉", 20), "\n")
+}
