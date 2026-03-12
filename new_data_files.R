@@ -1,4 +1,3 @@
-.rs.restartR()
 #Pipeline to analyse: 
 #fun_VF_counts
 #fun_KO_counts
@@ -26,6 +25,7 @@ library(readxl)
 
 # Importação dos dados
 data_dir <- "C:/Users/dti-/Documents/ANH/Simphyome_Analysis/Hav1801" 
+selected_groups <- c("control", "glycodex")
 
 #Files dictionary
 patterns <- c(
@@ -651,21 +651,108 @@ for(name in names(verification_dfs)) {
   }
 }
 
-# 6. Preview compacto
-cat("\n📋 PREVIEW - Primeiras colunas:\n")
-for(name in names(verification_dfs)) {
-  df <- verification_dfs[[name]]
+
+
+# FASE 6 - FILTRO POR GRUPOS (CONTROL & GLYCODEX)
+
+cat("\n", rep("=", 60), "\n")
+cat("=== FASE 6: FILTRO POR GRUPOS (CONTROL & GLYCODEX) ===\n")
+cat(rep("=", 60), "\n")
+
+library(dplyr)
+
+# 1. Grupos selecionados
+
+cat("🎯 Grupos selecionados:", paste(selected_groups, collapse = ", "), "\n")
+
+# 2. Verificar distribuição atual dos grupos
+cat("\n📊 Distribuição atual dos grupos:\n")
+treatment_counts <- table(df_meta$treatment)
+print(treatment_counts)
+cat("\n")
+
+# 3. Lista dos dataframes para filtrar
+dfs_to_filter <- list(
+  df_ko = df_ko,
+  df_AMR = df_AMR,
+  df_VF = df_VF,
+  df_CAZy = df_CAZy,
+  df_EC = df_EC,
+  df_COGs = df_COGs
+)
+
+# 4. Aplicar filtro com lapply (método eficiente)
+cat("🔍 Aplicando filtro por grupos...\n\n")
+
+dfs_grouped <- lapply(names(dfs_to_filter), function(name) {
+  
+  df <- dfs_to_filter[[name]]
+  
+  if(!is.null(df) && "treatment" %in% names(df)) {
+    
+    cat(paste("🔗 Filtrando", name, "...\n"))
+    
+    # Dimensões antes do filtro
+    original_dims <- dim(df)
+    original_groups <- table(df$treatment)
+    
+    # Filtrar por grupos selecionados
+    df_filtered <- df %>%
+      filter(treatment %in% selected_groups)
+    
+    # Dimensões após filtro
+    new_dims <- dim(df_filtered)
+    new_groups <- table(df_filtered$treatment)
+    
+    # Relatório
+    cat(paste("   📏 Dimensões:", original_dims[1], "x", original_dims[2], "→", 
+              new_dims[1], "x", new_dims[2], "\n"))
+    cat(paste("   📊 Amostras removidas:", original_dims[1] - new_dims[1], "\n"))
+    cat("   📈 Grupos finais:\n")
+    print(new_groups)
+    cat("\n")
+    
+    return(df_filtered)
+    
+  } else {
+    cat(paste("   ⚠", name, "não encontrado ou sem coluna treatment\n\n"))
+    return(NULL)
+  }
+})
+
+# 5. Nomear e criar novos dataframes com sufixo "_grouped"
+names(dfs_grouped) <- paste0(names(dfs_to_filter), "_grouped")
+
+# 6. Criar as variáveis no ambiente global
+list2env(dfs_grouped, envir = .GlobalEnv)
+
+# 7. Verificação final
+cat(rep("=", 50), "\n")
+cat("=== VERIFICAÇÃO FINAL - DATASETS AGRUPADOS ===\n")
+cat(rep("=", 50), "\n")
+
+grouped_datasets <- list(
+  df_ko_grouped, df_AMR_grouped, df_VF_grouped, 
+  df_CAZy_grouped, df_EC_grouped, df_COGs_grouped
+)
+names(grouped_datasets) <- names(dfs_grouped)
+
+for(name in names(grouped_datasets)) {
+  df <- grouped_datasets[[name]]
   if(!is.null(df)) {
-    cat(paste(name, ":", paste(names(df)[1:min(5, ncol(df))], collapse = " | "), "\n"))
+    dims <- dim(df)
+    groups <- table(df$treatment)
+    
+    cat(paste("📊", name, ":", dims[1], "amostras x", dims[2], "variáveis\n"))
+    cat(paste("   🎯 Grupos:", paste(names(groups), collapse = ", "), 
+              "| Distribuição:", paste(groups, collapse = ", "), "\n\n"))
   }
 }
 
-cat("\n", rep("🎊", 25), "\n")
-cat("✅ METADATA INTEGRADO COM SUCESSO!\n")
-cat("🚀 Datasets prontos para análises funcionais!\n")
-cat(rep("🎊", 25), "\n")
-
-#PCA inicial para ver outliers e sample swaps
+cat("✅ FILTRO POR GRUPOS CONCLUÍDO!\n")
+cat("• Novos datasets criados: df_*_grouped\n")
+cat("• Apenas amostras 'control' e 'glycodex' mantidas\n")
+cat("• Prontos para análises comparativas entre grupos!\n")
 
 
 
