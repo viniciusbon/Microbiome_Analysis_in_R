@@ -454,3 +454,264 @@ if(is.null(df_meta)) {
   cat("• Datasets prontos para análises funcionais integradas\n")
   cat(rep("🎉", 20), "\n")
 }
+
+
+library(dplyr)
+
+# FASE 5 - JOIN DAS COLUNAS METADATA
+
+cat("\n", rep("=", 60), "\n")
+cat("=== FASE 5: ADICIONANDO COLUNAS AGE E TREATMENT ===\n")
+cat(rep("=", 60), "\n")
+
+# 1. Preparar subset do metadata apenas com as colunas necessárias
+metadata_subset <- df_meta %>%
+  select(Sample_ID, age, treatment)
+
+cat("📋 Metadata subset preparado:\n")
+print(head(metadata_subset, 3))
+cat("\n")
+
+# 2. Lista dos dataframes para fazer join
+datasets_to_join <- list(
+  "df_ko" = df_ko,
+  "df_AMR" = df_AMR,
+  "df_VF" = df_VF,
+  "df_CAZy" = df_CAZy,
+  "df_EC" = df_EC,
+  "df_COGs" = df_COGs
+)
+
+# 3. Fazer left_join para cada dataset
+cat("🔗 Fazendo join das colunas metadata:\n\n")
+
+for(dataset_name in names(datasets_to_join)) {
+  
+  current_dataset <- datasets_to_join[[dataset_name]]
+  
+  if(!is.null(current_dataset)) {
+    
+    cat(paste("Processando", dataset_name, "...\n"))
+    
+    # Dimensões antes do join
+    original_dims <- dim(current_dataset)
+    
+    # Fazer left_join
+    dataset_with_metadata <- current_dataset %>%
+      left_join(metadata_subset, by = "Sample_ID")
+    
+    # Dimensões após join
+    new_dims <- dim(dataset_with_metadata)
+    
+    # Reordenar colunas: Sample_ID, age, treatment, depois resto
+    cols_order <- c("Sample_ID", "age", "treatment", 
+                    setdiff(names(dataset_with_metadata), c("Sample_ID", "age", "treatment")))
+    
+    dataset_with_metadata <- dataset_with_metadata[, cols_order]
+    
+    # Substituir o dataset original
+    assign(dataset_name, dataset_with_metadata, envir = .GlobalEnv)
+    
+    # Relatório
+    cat(paste("   ✅ Dimensões:", original_dims[1], "x", original_dims[2], "→", 
+              new_dims[1], "x", new_dims[2], "\n"))
+    cat(paste("   ✅ Colunas adicionadas:", new_dims[2] - original_dims[2], "\n"))
+    
+    # Verificar NAs
+    na_age <- sum(is.na(dataset_with_metadata$age))
+    na_treatment <- sum(is.na(dataset_with_metadata$treatment))
+    cat(paste("   ✅ NAs em age:", na_age, "| NAs em treatment:", na_treatment, "\n"))
+    
+    cat("\n")
+    
+  } else {
+    cat(paste("   ⚠", dataset_name, "não encontrado\n\n"))
+  }
+}
+
+# 4. Verificação final
+cat(rep("=", 50), "\n")
+cat("=== VERIFICAÇÃO FINAL DOS JOINS ===\n")
+cat(rep("=", 50), "\n")
+
+final_datasets <- list(
+  "df_meta" = df_meta,
+  "df_ko" = df_ko,
+  "df_AMR" = df_AMR,
+  "df_VF" = df_VF,
+  "df_CAZy" = df_CAZy,
+  "df_EC" = df_EC,
+  "df_COGs" = df_COGs
+)
+
+for(name in names(final_datasets)) {
+  if(!is.null(final_datasets[[name]])) {
+    dims <- dim(final_datasets[[name]])
+    cols <- names(final_datasets[[name]])
+    
+    cat(paste("📊", name, ":", dims[1], "linhas x", dims[2], "colunas\n"))
+    cat(paste("   Primeiras colunas:", paste(cols[1:min(6, length(cols))], collapse = ", "), "\n"))
+    
+    # Verificar se tem age e treatment
+    has_age <- "age" %in% cols
+    has_treatment <- "treatment" %in% cols
+    cat(paste("   Age:", ifelse(has_age, "✅", "❌"), "| Treatment:", ifelse(has_treatment, "✅", "❌"), "\n\n"))
+  }
+}
+
+# FASE 5 - JOIN SIMPLIFICADO DAS COLUNAS METADATA
+
+cat("\n", rep("=", 60), "\n")
+cat("=== FASE 5: ADICIONANDO AGE E TREATMENT (MÉTODO OTIMIZADO) ===\n")
+cat(rep("=", 60), "\n")
+
+library(dplyr)
+
+# 1. Lista nomeada dos dataframes para facilitar identificação
+dfs <- list(
+  df_ko = df_ko,
+  df_AMR = df_AMR,
+  df_VF = df_VF,
+  df_CAZy = df_CAZy,
+  df_EC = df_EC,
+  df_COGs = df_COGs
+)
+
+cat("📋 Processando", length(dfs), "datasets...\n")
+cat("Metadata subset:", ncol(df_meta[, c("Sample_ID", "age", "treatment")]), "colunas\n\n")
+
+# 2. Aplicar left_join com relatório
+dfs_joined <- lapply(names(dfs), function(name) {
+  
+  df <- dfs[[name]]
+  
+  if(!is.null(df)) {
+    
+    cat(paste("🔗 Processando", name, "...\n"))
+    
+    # Dimensões antes
+    original_dims <- dim(df)
+    
+    # Join
+    df_with_metadata <- left_join(df, 
+                                  df_meta[, c("Sample_ID", "age", "treatment")], 
+                                  by = "Sample_ID")
+    
+    # Reordenar colunas: Sample_ID, age, treatment, depois resto
+    cols_order <- c("Sample_ID", "age", "treatment", 
+                    setdiff(names(df_with_metadata), c("Sample_ID", "age", "treatment")))
+    df_with_metadata <- df_with_metadata[, cols_order]
+    
+    # Dimensões após
+    new_dims <- dim(df_with_metadata)
+    
+    # Relatório
+    cat(paste("   ✅", original_dims[1], "x", original_dims[2], "→", 
+              new_dims[1], "x", new_dims[2], 
+              "(+", new_dims[2] - original_dims[2], "colunas)\n"))
+    
+    # Verificar NAs
+    na_age <- sum(is.na(df_with_metadata$age))
+    na_treatment <- sum(is.na(df_with_metadata$treatment))
+    cat(paste("   📊 NAs - Age:", na_age, "| Treatment:", na_treatment, "\n\n"))
+    
+    return(df_with_metadata)
+    
+  } else {
+    cat(paste("   ⚠", name, "não encontrado\n\n"))
+    return(NULL)
+  }
+})
+
+# 3. Nomear a lista resultado
+names(dfs_joined) <- names(dfs)
+
+# 4. Substituir os dataframes originais no ambiente global
+list2env(dfs_joined, envir = .GlobalEnv)
+
+# 5. Verificação final compacta
+cat(rep("=", 50), "\n")
+cat("=== VERIFICAÇÃO FINAL ===\n")
+cat(rep("=", 50), "\n")
+
+verification_dfs <- list(df_ko, df_AMR, df_VF, df_CAZy, df_EC, df_COGs)
+names(verification_dfs) <- c("df_ko", "df_AMR", "df_VF", "df_CAZy", "df_EC", "df_COGs")
+
+for(name in names(verification_dfs)) {
+  df <- verification_dfs[[name]]
+  if(!is.null(df)) {
+    dims <- dim(df)
+    has_age <- "age" %in% names(df)
+    has_treatment <- "treatment" %in% names(df)
+    
+    cat(paste("📊", name, ":", dims[1], "x", dims[2], 
+              "| Age:", ifelse(has_age, "✅", "❌"),
+              "| Treatment:", ifelse(has_treatment, "✅", "❌"), "\n"))
+  }
+}
+
+# 6. Preview compacto
+cat("\n📋 PREVIEW - Primeiras colunas:\n")
+for(name in names(verification_dfs)) {
+  df <- verification_dfs[[name]]
+  if(!is.null(df)) {
+    cat(paste(name, ":", paste(names(df)[1:min(5, ncol(df))], collapse = " | "), "\n"))
+  }
+}
+
+cat("\n", rep("🎊", 25), "\n")
+cat("✅ METADATA INTEGRADO COM SUCESSO!\n")
+cat("🚀 Datasets prontos para análises funcionais!\n")
+cat(rep("🎊", 25), "\n")
+
+#PCA inicial para ver outliers e sample swaps
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
