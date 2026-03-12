@@ -188,3 +188,178 @@ cat("\n✅ TRANSPOSIÇÃO CONCLUÍDA! Todos os datasets agora estão padronizado
 cat("- Amostras como linhas\n")
 cat("- Features funcionais como colunas\n") 
 cat("- Primeira coluna = Sample_ID\n")
+
+# FASE 3 - PADRONIZAÇÃO DOS NOMES DAS AMOSTRAS
+
+cat("\n=== PADRONIZAÇÃO DOS NOMES DAS AMOSTRAS ===\n")
+
+# Função para padronizar nomes das amostras no metadata
+standardize_sample_names <- function(sample_names) {
+  # Substituir "." por "-" e remover apenas o último "_"
+  standardized_names <- sample_names %>%
+    str_replace_all("\\.", "-") %>%  # Substitui todos os "." por "-"
+    str_replace("_$", "")            # Remove apenas o "_" no final da string
+  
+  return(standardized_names)
+}
+
+# Verificar formato original dos nomes das amostras
+cat("Verificando formatos originais dos Sample_IDs:\n\n")
+
+# Mostrar exemplos dos nomes das amostras em cada dataset
+if(exists("df_ko_transposed")) {
+  cat("df_ko_transposed - Exemplos de Sample_ID:\n")
+  cat(paste(head(df_ko_transposed$Sample_ID, 3), collapse = ", "), "\n\n")
+}
+
+if(exists("df_CAZy_transposed")) {
+  cat("df_CAZy_transposed - Exemplos de Sample_ID:\n")
+  cat(paste(head(df_CAZy_transposed$Sample_ID, 3), collapse = ", "), "\n\n")
+}
+
+if(exists("df_COGs_transposed")) {
+  cat("df_COGs_transposed - Exemplos de Sample_ID:\n")
+  cat(paste(head(df_COGs_transposed$Sample_ID, 3), collapse = ", "), "\n\n")
+}
+
+if(exists("df_EC_transposed")) {
+  cat("df_EC_transposed - Exemplos de Sample_ID:\n")
+  cat(paste(head(df_EC_transposed$Sample_ID, 3), collapse = ", "), "\n\n")
+}
+
+if(!is.null(df_meta)) {
+  # Identificar qual coluna contém os Sample_IDs no metadata
+  sample_id_col <- names(df_meta)[1]  # Assumindo que é a primeira coluna
+  cat(paste("df_meta - Coluna Sample_ID (", sample_id_col, ") - Exemplos:\n"))
+  cat(paste(head(df_meta[[sample_id_col]], 3), collapse = ", "), "\n\n")
+  
+  # Aplicar padronização aos nomes no metadata
+  cat("Aplicando padronização ao df_meta...\n")
+  df_meta[[sample_id_col]] <- standardize_sample_names(df_meta[[sample_id_col]])
+  
+  cat("df_meta - Após padronização:\n")
+  cat(paste(head(df_meta[[sample_id_col]], 3), collapse = ", "), "\n\n")
+}
+
+# VERIFICAÇÃO FINAL DOS FORMATOS E NOMES PADRONIZADOS
+cat("=== VERIFICAÇÃO FINAL DOS FORMATOS PADRONIZADOS ===\n")
+
+# Lista dos datasets finais
+datasets_final <- list(
+  "KO" = if(exists("df_ko_transposed")) df_ko_transposed else NULL,
+  "AMR" = df_AMR, 
+  "VF" = df_VF, 
+  "CAZy" = if(exists("df_CAZy_transposed")) df_CAZy_transposed else NULL,
+  "EC" = if(exists("df_EC_transposed")) df_EC_transposed else NULL,
+  "COGs" = if(exists("df_COGs_transposed")) df_COGs_transposed else NULL,
+  "META" = df_meta
+)
+
+for(name in names(datasets_final)) {
+  if(!is.null(datasets_final[[name]])) {
+    dims <- dim(datasets_final[[name]])
+    first_col <- names(datasets_final[[name]])[1]
+    cat(paste(name, ":", dims[1], "linhas x", dims[2], "colunas"))
+    cat(paste(" | Primeira coluna:", first_col, "\n"))
+    
+    # Mostrar exemplos dos Sample_IDs padronizados
+    if(first_col %in% c("Sample_ID", names(df_meta)[1])) {
+      sample_examples <- head(datasets_final[[name]][[first_col]], 3)
+      cat(paste("  Exemplos Sample_ID:", paste(sample_examples, collapse = ", "), "\n"))
+    }
+  }
+}
+
+# Verificar se todos os Sample_IDs estão no mesmo formato
+cat("\n=== VERIFICAÇÃO DE CONSISTÊNCIA DOS SAMPLE_IDS ===\n")
+
+# Coletar todos os Sample_IDs dos datasets funcionais
+all_sample_ids <- list()
+
+if(exists("df_ko_transposed")) all_sample_ids[["KO"]] <- df_ko_transposed$Sample_ID
+if(exists("df_CAZy_transposed")) all_sample_ids[["CAZy"]] <- df_CAZy_transposed$Sample_ID
+if(exists("df_COGs_transposed")) all_sample_ids[["COGs"]] <- df_COGs_transposed$Sample_ID
+if(exists("df_EC_transposed")) all_sample_ids[["EC"]] <- df_EC_transposed$Sample_ID
+if(!is.null(df_meta)) all_sample_ids[["META"]] <- df_meta[[names(df_meta)[1]]]
+
+# Verificar consistência
+if(length(all_sample_ids) > 1) {
+  # Comparar se todos os datasets têm os mesmos Sample_IDs
+  first_dataset_ids <- all_sample_ids[[1]]
+  consistent <- TRUE
+  
+  for(i in 2:length(all_sample_ids)) {
+    if(!identical(sort(first_dataset_ids), sort(all_sample_ids[[i]]))) {
+      consistent <- FALSE
+      cat(paste("⚠ Inconsistência encontrada entre", names(all_sample_ids)[1], "e", names(all_sample_ids)[i], "\n"))
+    }
+  }
+  
+  if(consistent) {
+    cat("✅ Todos os Sample_IDs estão consistentes entre os datasets!\n")
+  }
+} else {
+  cat("⚠ Apenas um dataset encontrado para verificação\n")
+}
+
+cat("\n✅ PADRONIZAÇÃO CONCLUÍDA!\n")
+cat("- Todos os datasets transpostos estão no formato: amostras como linhas, features como colunas\n")
+cat("- Sample_IDs padronizados no formato: HAV1801-12-10-18_10A\n")
+cat("- Primeira coluna = Sample_ID em todos os datasets\n")
+#Adicionar coluna grupo e idadede acordo com metada (match case)
+
+
+
+#Filtrar de acordo com metada 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
