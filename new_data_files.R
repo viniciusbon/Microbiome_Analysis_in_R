@@ -1,3 +1,4 @@
+.rs.restartR()
 #Pipeline to analyse: 
 #fun_VF_counts
 #fun_KO_counts
