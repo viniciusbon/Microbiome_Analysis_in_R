@@ -228,3 +228,225 @@ p_pca_12 <- ggplot(pca_df,
 
 # Exibir o gráfico
 print(p_pca_12)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8 Biplot — Amostras + Loadings de Espécies (Vetores)
+# ─────────────────────────────────────────────────────────────────────────────
+
+n_arrows <- 15   # Número de top-features (espécies) para exibir como setas
+
+# 1. Recuperar nomes das espécies garantindo o mesmo alinhamento do pca_matrix
+species_labels_biplot <- tax_counts_final_qc %>%
+  filter(!is.na(s)) %>%
+  # Calcula a soma apenas nas colunas numéricas de amostra
+  mutate(count_sum = rowSums(select(., -all_of(tax_cols)))) %>%
+  filter(count_sum > 0) %>%
+  mutate(species_label = make.unique(paste(g, s, sep = "|"))) %>%
+  pull(species_label)
+
+# Atribuir os nomes como rownames da matriz de rotação (loadings)
+rownames(pca_result$rotation) <- species_labels_biplot
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.1 Helper — Construir data frame de loadings escalonados
+# ─────────────────────────────────────────────────────────────────────────────
+get_scaled_loadings <- function(rotation, scores_df, pc_x, pc_y, n_top, scale_pct = 0.65) {
+  
+  load_df <- as.data.frame(rotation[, c(pc_x, pc_y)]) %>%
+    setNames(c("PCx", "PCy")) %>%
+    rownames_to_column("species") %>%
+    mutate(
+      species_short = sub("^[^|]*\\|", "", species),   # Mantém apenas a parte da espécie após o "|"
+      loading_mag   = sqrt(PCx^2 + PCy^2)
+    ) %>%
+    arrange(desc(loading_mag)) %>%
+    head(n_top)
+  
+  # Seleciona apenas as colunas numéricas de scores para calcular o range máximo
+  scores_numeric <- scores_df %>% select(all_of(c(pc_x, pc_y)))
+  score_range    <- max(abs(scores_numeric))
+  loading_range  <- max(abs(load_df[, c("PCx", "PCy")]))
+  
+  # Fator de escala para as setas atingirem scale_pct do gráfico de dispersão
+  sf <- (score_range / loading_range) * scale_pct
+  
+  load_df %>%
+    mutate(PCx_sc = PCx * sf,
+           PCy_sc = PCy * sf)
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.2 Helper — Construir ggplot do Biplot
+# ─────────────────────────────────────────────────────────────────────────────
+make_biplot <- function(scores_df, loadings_scaled, pc_x_col, pc_y_col, x_label, y_label, title, subtitle) {
+  
+  ggplot() +
+    # ── Pontos das Amostras ──────────────────────────────────────────────────
+    geom_point(
+      data  = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], color = treatment),
+      size  = 3.2, alpha = 0.82
+    ) +
+    geom_text_repel(
+      data          = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], color = treatment, label = sample_clean),
+      size          = 2.6,
+      max.overlaps  = 20,
+      show.legend   = FALSE,
+      segment.color = "grey60",
+      segment.size  = 0.3
+    ) +
+    # ── Elipses de Confiança ─────────────────────────────────────────────────
+    stat_ellipse(
+      data      = scores_df,
+      aes(x = .data[[pc_x_col]], y = .data[[pc_y_col]], group = treatment, color = treatment),
+      type      = "norm",
+      linetype  = "dashed",
+      alpha     = 0.5,
+      linewidth = 0.7
+    ) +
+    # ── Setas dos Vetores (Loadings) ─────────────────────────────────────────
+    geom_segment(
+      data      = loadings_scaled,
+      aes(x = 0, y = 0, xend = PCx_sc, yend = PCy_sc),
+      arrow     = arrow(length = unit(0.22, "cm"), type = "closed"),
+      color     = "grey20",
+      linewidth = 0.45,
+      alpha     = 0.80
+    ) +
+    # ── Rótulos das Setas (Espécies) ─────────────────────────────────────────
+    geom_text_repel(
+      data          = loadings_scaled,
+      aes(x = PCx_sc, y = PCy_sc, label = species_short),
+      size          = 2.5,
+      color         = "grey10",
+      fontface      = "italic",
+      max.overlaps  = 40,
+      segment.color = "grey65",
+      segment.size  = 0.25,
+      box.padding   = 0.35,
+      force         = 1.5
+    ) +
+    scale_color_brewer(palette = "Set1") +
+    labs(
+      title    = title,
+      subtitle = subtitle,
+      x        = x_label,
+      y        = y_label,
+      color    = "Tratamento"
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title      = element_text(face = "bold"),
+      plot.subtitle   = element_text(color = "grey40", size = 10),
+      legend.position = "right"
+    )
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.8.3 Gerar e Exibir Biplot — PC1 vs PC2
+# ─────────────────────────────────────────────────────────────────────────────
+load_scaled_12 <- get_scaled_loadings(
+  rotation  = pca_result$rotation,
+  scores_df = pca_df,
+  pc_x      = "PC1",
+  pc_y      = "PC2",
+  n_top     = n_arrows
+)
+
+p_biplot_12 <- make_biplot(
+  scores_df       = pca_df,
+  loadings_scaled = load_scaled_12,
+  pc_x_col        = "PC1",
+  pc_y_col        = "PC2",
+  x_label         = sprintf("PC1 (%.1f%%)", var_exp[1]),
+  y_label         = sprintf("PC2 (%.1f%%)", var_exp[2]),
+  title           = "PCA Biplot — PC1 vs PC2",
+  subtitle        = sprintf("Nível de Espécie · Transformação CLR · Top %d vetores", n_arrows)
+)
+
+print(p_biplot_12)
+
+# 5.7  Scree plot (optional — how many PCs matter?) ────────────────────────────
+
+scree_df <- data.frame(
+  PC      = seq_along(var_exp),
+  Var_Pct = var_exp
+)
+
+p_scree <- ggplot(scree_df[1:15, ], aes(x = PC, y = Var_Pct)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_line(color = "darkred", linewidth = 0.8) +
+  geom_point(color = "darkred", size = 2) +
+  labs(
+    title = "Scree Plot — Variance Explained per PC",
+    x     = "Principal Component",
+    y     = "Variance Explained (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+
+print(p_scree)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.5 Sequencing depth check — before rarefaction
+# ─────────────────────────────────────────────────────────────────────────────
+# Note: Depth is calculated directly from the clean count matrix (tax_counts_final_qc),
+# bypassing the need for a phyloseq object at this specific QC stage.
+
+# Calculate total reads per sample (excluding the 7 taxonomy columns)
+depths <- colSums(tax_counts_final_qc %>% select(-all_of(tax_cols)))
+
+depth_df <- data.frame(
+  sample_clean = names(depths),
+  Depth        = depths
+) %>%
+  left_join(
+    metadata %>% select(sample_clean, treatment),
+    by = "sample_clean"
+  ) %>%
+  arrange(Depth)
+
+# Validate join
+if (any(is.na(depth_df$treatment))) {
+  warning("Depth join failed for some samples — check sample IDs!")
+  print(depth_df %>% filter(is.na(treatment)))
+} else {
+  cat("✔ Depth join OK — all samples matched to metadata\n")
+}
+
+rare_depth <- min(depth_df$Depth)
+
+cat(sprintf(
+  "Rarefaction depth (minimum): %d  |  Max: %d  |  Median: %.0f\n",
+  rare_depth, max(depth_df$Depth), median(depth_df$Depth)
+))
+
+p_depth <- ggplot(depth_df,
+                  aes(x = reorder(sample_clean, Depth),
+                      y = Depth,
+                      fill = treatment)) +
+  geom_col(alpha = 0.85) +
+  geom_hline(yintercept = rare_depth,
+             color = "darkred", linetype = "dashed", linewidth = 0.8) +
+  annotate("text",
+           x     = 1,
+           y     = rare_depth,
+           label = sprintf("Rarefaction depth: %d", rare_depth),
+           vjust = -0.5, hjust = 0, color = "darkred", size = 3.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title    = "Sequencing Depth per Sample",
+    subtitle = "Red dashed line = rarefaction threshold (minimum depth)",
+    x        = "Sample",
+    y        = "Read Count",
+    fill     = "Treatment"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.text.x   = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+
+print(p_depth)
