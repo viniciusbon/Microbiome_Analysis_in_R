@@ -1,0 +1,63 @@
+library(tidyverse)
+library(janitor)
+
+# 1. Carregar Metadados com segurança
+# Usamos read_delim para garantir que ele entenda o formato tabular
+metadata <- read_delim("HAV1801_meta.txt", delim = "\t", show_col_types = FALSE) %>% 
+  clean_names() %>% 
+  # Limpeza dos IDs para bater com as tabelas de contagem
+  mutate(sample_clean = gsub("\\.", "-", gsub("_$", "", sample))) %>% 
+  select(sample_clean, treatment, everything(), -sample)
+
+valid_samples <- metadata$sample_clean
+
+# 2. Função de Processamento Direta (sem o erro de clean_names)
+process_file <- function(path, type_label) {
+  
+  # Lendo o arquivo primeiro
+  df_raw <- read_delim(path, delim = "\t", show_col_types = FALSE)
+  
+  # SE O ARQUIVO ESTIVER VAZIO OU SEM COLUNAS, PULA
+  if (ncol(df_raw) < 2) return(NULL)
+  
+  # Caso seja formato LONGO (VF e AMR que possuem Sample_ID)
+  if ("Sample_ID" %in% colnames(df_raw)) {
+    df_ready <- df_raw %>% 
+      rename(sample_clean = Sample_ID, count = readCount, feature = Gene_Name) %>% 
+      filter(sample_clean %in% valid_samples) %>% 
+      group_by(sample_clean, feature) %>% 
+      summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+    
+  } else {
+    # Caso seja formato LARGO (Taxonomia, KO, EC, CAZy, COG)
+    feature_col <- colnames(df_raw)[1] # Pega a primeira coluna (ex: 'ko', 'ec', 'k')
+    
+    df_ready <- df_raw %>% 
+      pivot_longer(cols = starts_with("HAV"), names_to = "sample_clean", values_to = "count") %>% 
+      filter(sample_clean %in% valid_samples) %>% 
+      rename(feature = !!sym(feature_col)) %>% 
+      group_by(sample_clean, feature) %>% 
+      summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+  }
+  
+  # Adiciona Metadados e retorna
+  df_ready %>% 
+    inner_join(metadata, by = "sample_clean") %>% 
+    mutate(data_type = type_label)
+}
+
+# 3. Execução Individual (Mais fácil de debugar que o loop)
+# Se um arquivo der erro, você saberá exatamente qual foi
+
+tax_ready   <- process_file("hav1801_tax_counts.tsv", "Taxonomy")
+ko_ready    <- process_file("hav1801_fun_KO_counts.txt", "KO")
+ec_ready    <- process_file("hav1801_fun_EC_count.txt", "EC")
+cazy_ready  <- process_file("hav1801_fun_CAZy_counts.txt", "CAZy")
+vf_ready    <- process_file("hav1801_fun_VF_counts.tsv", "VF")
+amr_ready   <- process_file("hav1801_fun_AMR_counts.tsv", "AMR")
+
+# 4. Unificar tudo em um Master DF para análise
+master_df <- bind_rows(tax_ready, ko_ready, ec_ready, cazy_ready, vf_ready, amr_ready)
+
+# Visualizar o resultado
+print(head(master_df))
