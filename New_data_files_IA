@@ -1,27 +1,46 @@
+# ==============================================================================
+# PIPELINE ETL E ANÁLISE MULTIVARIADA DE MICROBIOMA - HAV1801
+# ==============================================================================
+
+# Carregar pacotes necessários
 library(tidyverse)
 library(janitor)
+library(ggrepel)
 
-# 1. Carregar Metadados com segurança
-# Usamos read_delim para garantir que ele entenda o formato tabular
-metadata <- read_delim("HAV1801_meta.txt", delim = "\t", show_col_types = FALSE) %>% 
+# ==============================================================================
+# 1. SETUP E FILTRAGEM DE METADADOS
+# ==============================================================================
+cat("1. Carregando e limpando metadados...\n")
+
+target_age <- "d42"
+target_groups <- c("control", "m2-102")
+
+# Lendo metadados primeiro e limpando
+metadata <- read_tsv("HAV1801_meta.txt", show_col_types = FALSE) %>% 
   clean_names() %>% 
-  # Limpeza dos IDs para bater com as tabelas de contagem
-  mutate(sample_clean = gsub("\\.", "-", gsub("_$", "", sample))) %>% 
-  select(sample_clean, treatment, everything(), -sample)
+  # Corrige os IDs: substitui pontos por hífens, remove underscore no final
+  mutate(sample_clean = str_replace_all(sample, "\\.", "-"),
+         sample_clean = str_remove(sample_clean, "_$")) %>% 
+  select(sample_clean, treatment, age_group, everything(), -sample) %>%
+  # Aplica os filtros de desenho experimental
+  filter(age_group == target_age,
+         treatment %in% target_groups)
 
+# Extrai o vetor de amostras válidas para os próximos passos
 valid_samples <- metadata$sample_clean
 
-# 2. Função de Processamento Direta (sem o erro de clean_names)
+cat("Amostras retidas após filtro do metadado:", length(valid_samples), "\n\n")
+
+# ==============================================================================
+# 2. FUNÇÃO DE PROCESSAMENTO UNIVERSAL (Gera Formato Longo)
+# ==============================================================================
+# Esta função normaliza qualquer formato (Longo ou Largo) para um padrão analítico
 process_file <- function(path, type_label) {
-  
-  # Lendo o arquivo primeiro
-  df_raw <- read_delim(path, delim = "\t", show_col_types = FALSE)
-  
-  # SE O ARQUIVO ESTIVER VAZIO OU SEM COLUNAS, PULA
+  df_raw <- read_tsv(path, show_col_types = FALSE)
   if (ncol(df_raw) < 2) return(NULL)
   
-  # Caso seja formato LONGO (VF e AMR que possuem Sample_ID)
   if ("Sample_ID" %in% colnames(df_raw)) {
+    # FORMATO LONGO (VF, AMR)
     df_ready <- df_raw %>% 
       rename(sample_clean = Sample_ID, count = readCount, feature = Gene_Name) %>% 
       filter(sample_clean %in% valid_samples) %>% 
@@ -29,35 +48,183 @@ process_file <- function(path, type_label) {
       summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
     
   } else {
-    # Caso seja formato LARGO (Taxonomia, KO, EC, CAZy, COG)
-    feature_col <- colnames(df_raw)[1] # Pega a primeira coluna (ex: 'ko', 'ec', 'k')
+    # FORMATO LARGO (Taxonomia, KO, EC, CAZy, COGs)
     
+    # Se for taxonomia, unifica os 7 níveis em uma única coluna 'feature'
+    if (all(c("k", "p", "c", "o", "f", "g", "s") %in% colnames(df_raw))) {
+      df_raw <- df_raw %>% 
+        unite("feature", k:s, sep = "|")
+    } else {
+      # Para os demais (KO, EC, etc), renomeia a 1ª coluna
+      colnames(df_raw)[1] <- "feature"
+    }
+    
+    # Agora pivotamos com segurança
     df_ready <- df_raw %>% 
-      pivot_longer(cols = starts_with("HAV"), names_to = "sample_clean", values_to = "count") %>% 
+      pivot_longer(cols = -feature, names_to = "sample_clean", values_to = "count") %>% 
       filter(sample_clean %in% valid_samples) %>% 
-      rename(feature = !!sym(feature_col)) %>% 
       group_by(sample_clean, feature) %>% 
       summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
   }
   
-  # Adiciona Metadados e retorna
+  # Adiciona os metadados
   df_ready %>% 
     inner_join(metadata, by = "sample_clean") %>% 
     mutate(data_type = type_label)
 }
 
-# 3. Execução Individual (Mais fácil de debugar que o loop)
-# Se um arquivo der erro, você saberá exatamente qual foi
+# ==============================================================================
+# 3. EXECUÇÃO DO PROCESSAMENTO (Para Estatísticas Gerais)
+# ==============================================================================
+cat("2. Processando arquivos de contagem...\n")
 
-tax_ready   <- process_file("hav1801_tax_counts.tsv", "Taxonomy")
-ko_ready    <- process_file("hav1801_fun_KO_counts.txt", "KO")
-ec_ready    <- process_file("hav1801_fun_EC_count.txt", "EC")
-cazy_ready  <- process_file("hav1801_fun_CAZy_counts.txt", "CAZy")
-vf_ready    <- process_file("hav1801_fun_VF_counts.tsv", "VF")
-amr_ready   <- process_file("hav1801_fun_AMR_counts.tsv", "AMR")
+tax_ready  <- process_file("hav1801_tax_counts.tsv", "Taxonomy")
+ko_ready   <- process_file("hav1801_fun_KO_counts.txt", "KO")
+ec_ready   <- process_file("hav1801_fun_EC_count.txt", "EC")
+cazy_ready <- process_file("hav1801_fun_CAZy_counts.txt", "CAZy")
+cogs_ready <- process_file("hav1801_fun_COGs_count.txt", "COGs")
+vf_ready   <- process_file("hav1801_fun_VF_counts.tsv", "VF")
+amr_ready  <- process_file("hav1801_fun_AMR_counts.tsv", "AMR")
 
-# 4. Unificar tudo em um Master DF para análise
-master_df <- bind_rows(tax_ready, ko_ready, ec_ready, cazy_ready, vf_ready, amr_ready)
+# Resumo Estatístico Exemplo (Taxonomia)
+stats_summary <- tax_ready %>%
+  group_by(treatment) %>%
+  summarise(
+    n_amostras = n_distinct(sample_clean),
+    total_features = n_distinct(feature),
+    media_leituras = mean(count),
+    min_leituras = min(count),
+    max_leituras = max(count)
+  )
 
-# Visualizar o resultado
-print(head(master_df))
+print("--- Resumo Estatístico (Taxonomia) ---")
+print(stats_summary)
+
+# ==============================================================================
+# 4. PREPARAÇÃO FORMATO WIDE PARA TAXONOMIA (Necessário para QC e PCA)
+# ==============================================================================
+cat("\n3. Preparando matriz de Taxonomia para QC e PCA...\n")
+
+tax_raw <- read_tsv("hav1801_tax_counts.tsv", show_col_types = FALSE)
+tax_cols <- c("k", "p", "c", "o", "f", "g", "s")
+
+# Mantém colunas taxonômicas e apenas as amostras filtradas do metadado
+cols_to_keep <- intersect(colnames(tax_raw), valid_samples)
+tax_wide_filtered <- tax_raw %>%
+  select(all_of(tax_cols), all_of(cols_to_keep))
+
+# ==============================================================================
+# 5. CONTROLE DE QUALIDADE: CONTAMINAÇÃO PELO HOSPEDEIRO
+# ==============================================================================
+# 5.1 Leituras do hospedeiro (Gallus gallus)
+host_counts <- tax_wide_filtered %>%
+  filter(s == "Gallus_gallus") %>%
+  select(-all_of(tax_cols)) %>%
+  pivot_longer(everything(), names_to = "sample_clean", values_to = "Host_Reads")
+
+# Se não houver Gallus_gallus, cria a tabela zerada
+if(nrow(host_counts) == 0) {
+  host_counts <- tibble(sample_clean = cols_to_keep, Host_Reads = 0)
+}
+
+# 5.2 Leituras totais por amostra
+total_reads <- tax_wide_filtered %>%
+  select(-all_of(tax_cols)) %>%
+  summarise(across(everything(), sum)) %>%
+  pivot_longer(everything(), names_to = "sample_clean", values_to = "Total_Reads")
+
+# 5.3 Porcentagem de contaminação
+host_contamination_df <- inner_join(host_counts, total_reads, by = "sample_clean") %>%
+  filter(Total_Reads > 0) %>%
+  mutate(Host_Pct = (Host_Reads / Total_Reads) * 100)
+
+# 5.4 Filtro de amostras (Threshold)
+host_threshold <- 20
+
+samples_to_keep <- host_contamination_df %>%
+  filter(Host_Pct < host_threshold) %>%
+  pull(sample_clean)
+
+# Matriz final sem o hospedeiro e sem as amostras muito contaminadas
+tax_counts_no_host <- tax_wide_filtered %>%
+  filter(s != "Gallus_gallus") %>%
+  select(all_of(tax_cols), all_of(samples_to_keep))
+
+cat(sprintf("QC Hospedeiro | Threshold: %d%% | Removidas: %d | Restantes: %d\n",
+            host_threshold,
+            length(cols_to_keep) - length(samples_to_keep),
+            length(samples_to_keep)))
+
+# ==============================================================================
+# 6. CONTROLE DE QUALIDADE: FILTRO DE PREVALÊNCIA E ABUNDÂNCIA
+# ==============================================================================
+min_rel_abund  <- 0.0001   # 0.01% abundância relativa
+min_prevalence <- 0.10     # presente em pelo menos 10% das amostras
+
+# Separa apenas a matriz numérica
+tax_count_mat <- tax_counts_no_host %>% select(-all_of(tax_cols)) %>% as.matrix()
+
+# Calcula a abundância relativa e a prevalência
+tax_rel_mat <- sweep(tax_count_mat, 2, colSums(tax_count_mat), "/")
+tax_prevalence <- rowMeans(tax_rel_mat >= min_rel_abund, na.rm = TRUE)
+
+# Aplica o filtro
+tax_rows_pass <- tax_prevalence >= min_prevalence
+tax_counts_final_qc <- tax_counts_no_host[tax_rows_pass, ]
+
+cat(sprintf("QC Taxonomia | Features originais: %d | Após filtro: %d | Removidas: %d\n\n",
+            length(tax_rows_pass),
+            sum(tax_rows_pass),
+            sum(!tax_rows_pass)))
+
+# ==============================================================================
+# 7. ANÁLISE DE COMPONENTES PRINCIPAIS (PCA) COM CLR
+# ==============================================================================
+cat("4. Calculando Transformação CLR e PCA...\n")
+
+# 7.1 Preparar matriz focada no nível de espécie
+pca_matrix <- tax_counts_final_qc %>%
+  filter(!is.na(s)) %>%                     
+  select(-all_of(tax_cols)) %>%             
+  filter(rowSums(.) > 0)                    
+
+# Transpor (Amostras nas linhas, Espécies nas colunas)
+pca_matrix_t <- t(pca_matrix)
+
+# 7.2 Transformação CLR (Centered Log-Ratio)
+pca_clr <- pca_matrix_t + 0.5                                      # Pseudocount
+pca_clr <- sweep(pca_clr, 1, rowSums(pca_clr), "/")                # Abundância relativa
+pca_clr <- log(pca_clr) - rowMeans(log(pca_clr))                   # CLR
+
+# 7.3 Rodar PCA
+pca_result   <- prcomp(pca_clr, center = TRUE, scale. = FALSE)
+var_exp      <- summary(pca_result)$importance[2, ] * 100        
+
+# 7.4 Construir Dataframe para o Plot (Juntando dados do PCA e Metadados)
+pca_df <- as.data.frame(pca_result$x[, 1:3]) %>%
+  rownames_to_column("sample_clean") %>%
+  left_join(
+    metadata %>% select(sample_clean, treatment),
+    by = "sample_clean"
+  )
+
+# 7.5 Plot: PC1 vs PC2
+p_pca_12 <- ggplot(pca_df, 
+                   aes(x = PC1, y = PC2, color = treatment, label = sample_clean)) +
+  geom_point(size = 3.5, alpha = 0.85) +
+  geom_text_repel(size = 3, max.overlaps = 30, show.legend = FALSE, segment.color = "grey60") +
+  stat_ellipse(aes(group = treatment), type = "norm", linetype = "dashed", alpha = 0.5, linewidth = 0.7) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title    = "PCA — Distribuição das Amostras (PC1 vs PC2)",
+    subtitle = "Nível de Espécie · Transformação CLR",
+    x        = sprintf("PC1 (%.1f%%)", var_exp[1]),
+    y        = sprintf("PC2 (%.1f%%)", var_exp[2]),
+    color    = "Tratamento"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "right")
+
+# Exibir o gráfico
+print(p_pca_12)
