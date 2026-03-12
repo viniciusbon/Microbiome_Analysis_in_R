@@ -71,6 +71,9 @@ df_EC <- data_storage$EC
 df_COGs <- data_storage$COGs
 df_meta <- data_storage$meta
 
+#stadarize metadata ID colum name
+colnames(df_meta)[colnames(df_meta) == "sample"] <- "Sample_ID"
+
 # Verificação dos formatos originais
 cat("=== VERIFICAÇÃO DOS FORMATOS ORIGINAIS ===\n")
 datasets <- list("KO" = df_ko, "AMR" = df_AMR, "VF" = df_VF, 
