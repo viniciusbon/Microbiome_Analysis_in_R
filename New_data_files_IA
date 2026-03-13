@@ -939,6 +939,447 @@ cat("   • betadisp_results         — teste de homogeneidade de dispersão\n"
 
 
 
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║   PARTE C — ABUNDÂNCIA DIFERENCIAL: MaAsLin2 (v2 — CLR CORRIGIDO)       ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║  CORREÇÕES:                                                              ║
+# ║  • normalization = "CLR", transform = "NONE"  (sem dupla normalização)   ║
+# ║  • Pré-filtro de prevalência (reduz nº de testes → mais poder)           ║
+# ║  • reference = "treatment,control"  (explícito)                          ║
+# ║  • max_significance = 1  (retorna TODOS os resultados para o volcano)    ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
+suppressPackageStartupMessages(library(Maaslin2))
 
+cat("\n")
+cat("╔══════════════════════════════════════════════════════════════════════╗\n")
+cat("║       ABUNDÂNCIA DIFERENCIAL — MaAsLin2  (CLR, v2)                 ║\n")
+cat("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.1  Preparar input — dados NÃO rarefados
+#      MaAsLin2 faz normalização internamente (CLR)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 9.1a  Extrair nível de espécie ──────────────────────────────────────────
+
+species_maaslin <- dados_tax_filtrado %>%
+  select(sample_id, feature, count) %>%
+  separate(
+    feature,
+    into  = c("Kingdom", "Phylum", "Class", "Order",
+              "Family", "Genus", "Species"),
+    sep   = "\\|",
+    fill  = "right",
+    extra = "drop",
+    remove = FALSE
+  ) %>%
+  mutate(across(Kingdom:Species, ~ str_remove(.x, "^[a-zA-Z]+__"))) %>%
+  filter(!is.na(Species), Species != "", Species != "NA") %>%
+  # Agregar por Genus|Species (evitar duplicatas de lineagem)
+  mutate(tax_id = paste(Genus, Species, sep = "|")) %>%
+  group_by(sample_id, tax_id) %>%
+  summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+
+cat(sprintf("✔ Features nível espécie (bruto): %d\n",
+            n_distinct(species_maaslin$tax_id)))
+
+# ── 9.1b  Matriz wide: amostras × espécies ─────────────────────────────────
+
+maaslin_features <- species_maaslin %>%
+  pivot_wider(names_from = tax_id, values_from = count, values_fill = 0) %>%
+  column_to_rownames("sample_id") %>%
+  as.data.frame()
+
+# ── 9.1c  DIAGNÓSTICO DE PREVALÊNCIA ───────────────────────────────────────
+#          (mostra por que filtrar é essencial)
+
+n_samples_total <- nrow(maaslin_features)
+prev_per_feat   <- colMeans(maaslin_features > 0)
+
+cat(sprintf("\n── Distribuição de Prevalência (%d amostras) ─────────────────\n",
+            n_samples_total))
+cat(sprintf("  Total features espécie : %5d\n", ncol(maaslin_features)))
+cat(sprintf("  Prevalência >=  1%%    : %5d\n", sum(prev_per_feat >= 0.01)))
+cat(sprintf("  Prevalência >=  5%%    : %5d\n", sum(prev_per_feat >= 0.05)))
+cat(sprintf("  Prevalência >= 10%%    : %5d\n", sum(prev_per_feat >= 0.10)))
+cat(sprintf("  Prevalência >= 20%%    : %5d\n", sum(prev_per_feat >= 0.20)))
+cat(sprintf("  Prevalência >= 50%%    : %5d\n", sum(prev_per_feat >= 0.50)))
+cat("─────────────────────────────────────────────────────────────\n")
+
+# ── 9.1d  PRÉ-FILTRO DE PREVALÊNCIA ────────────────────────────────────────
+# Reduz testes múltiplos → melhora poder estatístico drasticamente
+# Ajuste min_prev_threshold se necessário (0.10 = default MaAsLin2)
+
+min_prev_threshold <- 0.10
+
+keep_feat <- names(prev_per_feat[prev_per_feat >= min_prev_threshold])
+maaslin_features_filt <- maaslin_features[, keep_feat, drop = FALSE]
+
+cat(sprintf("\n✔ Pré-filtro prevalência >= %.0f%%: %d → %d features (removidas %d)\n",
+            min_prev_threshold * 100,
+            ncol(maaslin_features),
+            ncol(maaslin_features_filt),
+            ncol(maaslin_features) - ncol(maaslin_features_filt)))
+
+if (ncol(maaslin_features_filt) == 0) {
+  stop("❌ Nenhuma feature passou no filtro de prevalência! Reduza min_prev_threshold.")
+}
+
+# ── 9.1e  Metadata ─────────────────────────────────────────────────────────
+
+maaslin_meta <- metadata_filtrado %>%
+  select(sample_id, treatment) %>%
+  column_to_rownames("sample_id") %>%
+  as.data.frame()
+
+# ── 9.1f  Alinhar amostras ─────────────────────────────────────────────────
+
+common_s <- intersect(rownames(maaslin_features_filt), rownames(maaslin_meta))
+maaslin_features_filt <- maaslin_features_filt[common_s, , drop = FALSE]
+maaslin_meta          <- maaslin_meta[common_s, , drop = FALSE]
+
+ref_group        <- "control"
+comparison_group <- setdiff(unique(maaslin_meta$treatment), ref_group)
+
+cat(sprintf("✔ Input final: %d amostras × %d features\n",
+            nrow(maaslin_features_filt), ncol(maaslin_features_filt)))
+cat(sprintf("  Referência : %s\n  Comparação : %s\n",
+            ref_group, comparison_group))
+cat(sprintf("  Amostras por grupo:\n"))
+print(table(maaslin_meta$treatment))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.2  Rodar MaAsLin2 — CLR + NONE  (recomendação do colega)
+# ─────────────────────────────────────────────────────────────────────────────
+
+maaslin_output_dir <- "maaslin2_output_clr"
+
+set.seed(42)
+maaslin_fit <- Maaslin2(
+  input_data       = maaslin_features_filt,
+  input_metadata   = maaslin_meta,
+  output           = maaslin_output_dir,
+  fixed_effects    = "treatment",
+  reference        = "treatment,control",   # formato: "variável,referência"
+  normalization    = "CLR",                 # Centered Log-Ratio (composicional)
+  transform        = "NONE",               # CLR já é log-based → sem transform
+  analysis_method  = "LM",
+  max_significance = 1,                    # retornar TODOS os resultados
+  correction       = "BH",
+  standardize      = FALSE,
+  plot_heatmap     = FALSE,
+  plot_scatter     = FALSE,
+  max_pngs         = 100,
+  cores            = 1
+)
+
+cat(sprintf("\n✔ MaAsLin2 (CLR) completo. Output: %s/\n", maaslin_output_dir))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.3  Processar resultados
+# ─────────────────────────────────────────────────────────────────────────────
+
+q_threshold <- 0.25   # Padrão MaAsLin2; use 0.05 para mais restritivo
+
+maaslin_res <- maaslin_fit$results %>%
+  as_tibble() %>%
+  filter(metadata == "treatment") %>%
+  arrange(qval, pval) %>%
+  mutate(
+    # Label legível: "Genus Species" em vez de "Genus|Species"
+    feature_clean = str_replace(feature, "\\|", " "),
+    qval_safe     = pmax(qval, 1e-10),
+    neg_log10_q   = -log10(qval_safe),
+    neg_log10_p   = -log10(pmax(pval, 1e-10)),
+    Direction     = case_when(
+      qval < q_threshold & coef > 0 ~
+        paste("Enriched in", comparison_group),
+      qval < q_threshold & coef < 0 ~
+        paste("Enriched in", ref_group),
+      TRUE ~ "Not significant"
+    )
+  )
+
+# Contagens
+n_tested   <- nrow(maaslin_res)
+n_sig_25   <- sum(maaslin_res$qval < 0.25, na.rm = TRUE)
+n_sig_10   <- sum(maaslin_res$qval < 0.10, na.rm = TRUE)
+n_sig_05   <- sum(maaslin_res$qval < 0.05, na.rm = TRUE)
+n_enr_comp <- sum(maaslin_res$qval < q_threshold &
+                    maaslin_res$coef > 0, na.rm = TRUE)
+n_enr_ref  <- sum(maaslin_res$qval < q_threshold &
+                    maaslin_res$coef < 0, na.rm = TRUE)
+
+cat(sprintf("\n── Resultados ──────────────────────────────\n"))
+cat(sprintf("  Features testadas  : %d\n", n_tested))
+cat(sprintf("  q < 0.25           : %d\n", n_sig_25))
+cat(sprintf("  q < 0.10           : %d\n", n_sig_10))
+cat(sprintf("  q < 0.05           : %d\n", n_sig_05))
+cat(sprintf("  Enriquecidas %-10s: %d\n", comparison_group, n_enr_comp))
+cat(sprintf("  Enriquecidas %-10s: %d\n", ref_group, n_enr_ref))
+
+# Top hits
+cat("\n══ Top 20 Features (ordenado por p nominal) ═════════════════════════\n")
+print(
+  maaslin_res %>%
+    select(feature_clean, coef, stderr, pval, qval, Direction) %>%
+    head(20),
+  n = 20
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.4  Cores + labels para volcano
+# ─────────────────────────────────────────────────────────────────────────────
+
+volcano_colors <- c(
+  setNames(group_colors[comparison_group],
+           paste("Enriched in", comparison_group)),
+  setNames(group_colors[ref_group],
+           paste("Enriched in", ref_group)),
+  "Not significant" = "grey72"
+)
+
+# Labels: features significativas (q < threshold)
+# Fallback: top 10 por p nominal se nenhuma for significativa
+if (n_sig_25 > 0) {
+  top_labels <- maaslin_res %>%
+    filter(qval < q_threshold) %>%
+    group_by(Direction) %>%
+    arrange(qval, desc(abs(coef))) %>%
+    slice_head(n = 12) %>%
+    ungroup()
+  label_note <- sprintf("q < %.2f labels", q_threshold)
+} else {
+  top_labels <- maaslin_res %>%
+    arrange(pval) %>%
+    head(10)
+  label_note <- "top 10 by nominal p (none FDR-significant)"
+  cat("⚠ Nenhuma feature q < 0.25 — rotulando top 10 por p nominal\n")
+}
+
+# Linhas tracejadas verticais: coef threshold dinâmico
+coef_threshold <- round(quantile(abs(maaslin_res$coef), 0.75, na.rm = TRUE), 1)
+if (coef_threshold == 0) coef_threshold <- 0.5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.5  Volcano plot
+# ─────────────────────────────────────────────────────────────────────────────
+
+p_volcano <- ggplot(
+  maaslin_res,
+  aes(x = coef, y = neg_log10_q, color = Direction, size = abs(coef))
+) +
+  geom_point(alpha = 0.65) +
+  geom_text_repel(
+    data          = top_labels,
+    aes(label     = feature_clean),
+    size          = 2.9,
+    max.overlaps  = 30,
+    segment.color = "grey50",
+    segment.size  = 0.3,
+    box.padding   = 0.45,
+    show.legend   = FALSE
+  ) +
+  geom_hline(
+    yintercept = -log10(q_threshold),
+    linetype   = "dashed",
+    color      = "firebrick",
+    linewidth  = 0.6
+  ) +
+  geom_vline(
+    xintercept = c(-coef_threshold, coef_threshold),
+    linetype   = "dashed",
+    color      = "grey45",
+    linewidth  = 0.5
+  ) +
+  annotate("text",
+           x     = Inf, y = -log10(q_threshold),
+           label = sprintf("q = %.2f", q_threshold),
+           hjust = 1.05, vjust = -0.5,
+           size = 3.2, color = "firebrick", fontface = "italic") +
+  annotate("text",
+           x     = min(maaslin_res$coef, na.rm = TRUE),
+           y     = max(maaslin_res$neg_log10_q, na.rm = TRUE),
+           label = sprintf("n = %d", n_enr_ref),
+           hjust = 0, vjust = 1,
+           size = 4, color = group_colors[ref_group], fontface = "bold") +
+  annotate("text",
+           x     = max(maaslin_res$coef, na.rm = TRUE),
+           y     = max(maaslin_res$neg_log10_q, na.rm = TRUE),
+           label = sprintf("n = %d", n_enr_comp),
+           hjust = 1, vjust = 1,
+           size = 4, color = group_colors[comparison_group], fontface = "bold") +
+  scale_color_manual(values = volcano_colors) +
+  scale_size_continuous(range = c(1.2, 4.5), guide = "none") +
+  labs(
+    title    = "Differential Abundance — MaAsLin2 (CLR)",
+    subtitle = sprintf(
+      "%s vs %s  \u00B7  CLR + NONE  \u00B7  BH correction  \u00B7  %s",
+      comparison_group, ref_group, label_note
+    ),
+    x = sprintf(
+      "MaAsLin2 Coefficient (CLR log-fold change)\n\u2190 Higher in %s  |  Higher in %s \u2192",
+      ref_group, comparison_group
+    ),
+    y     = expression(-log[10](q-value)),
+    color = NULL
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    plot.subtitle   = element_text(color = "grey40", size = 9.5),
+    legend.position = "bottom",
+    legend.text     = element_text(size = 10)
+  )
+
+print(p_volcano)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.6  Bar plot — effect size das top features
+# ─────────────────────────────────────────────────────────────────────────────
+
+n_top_bar <- 20
+
+# Estratégia adaptativa: usar q < threshold, ou fallback para p nominal
+if (n_sig_25 > 0) {
+  
+  # ── Cenário A: features significativas existem ───────────────────────────
+  
+  top_pos <- maaslin_res %>%
+    filter(qval < q_threshold, coef > 0) %>%
+    arrange(qval, desc(coef)) %>% head(n_top_bar / 2)
+  
+  top_neg <- maaslin_res %>%
+    filter(qval < q_threshold, coef < 0) %>%
+    arrange(qval, coef) %>% head(n_top_bar / 2)
+  
+  top_features_bar <- bind_rows(top_neg, top_pos) %>%
+    mutate(feature_clean = fct_reorder(feature_clean, coef))
+  
+  bar_title    <- sprintf("Top %d Differentially Abundant Species",
+                          nrow(top_features_bar))
+  bar_subtitle <- sprintf(
+    "MaAsLin2 \u00B7 q < %.2f \u00B7 CLR \u00B7 Error bars = \u00B11 SE",
+    q_threshold)
+  bar_fill_col <- volcano_colors
+  bar_fill_var <- "Direction"
+  
+} else {
+  
+  # ── Cenário B: nenhuma significativa → top por p nominal (exploratório) ──
+  
+  top_features_bar <- maaslin_res %>%
+    arrange(pval) %>%
+    head(n_top_bar) %>%
+    mutate(
+      Direction_nominal = case_when(
+        coef > 0 ~ paste("Higher in", comparison_group),
+        coef < 0 ~ paste("Higher in", ref_group),
+        TRUE     ~ "No difference"
+      ),
+      feature_clean = fct_reorder(feature_clean, coef)
+    )
+  
+  bar_title    <- sprintf("Top %d Species by Nominal p-value (EXPLORATORY)",
+                          nrow(top_features_bar))
+  bar_subtitle <- paste0(
+    "MaAsLin2 \u00B7 CLR \u00B7 ",
+    "\u26A0 Not FDR-significant \u2014 hypothesis generation only")
+  bar_fill_col <- c(
+    setNames(group_colors[comparison_group],
+             paste("Higher in", comparison_group)),
+    setNames(group_colors[ref_group],
+             paste("Higher in", ref_group)),
+    "No difference" = "grey72"
+  )
+  bar_fill_var <- "Direction_nominal"
+}
+
+# ── Plot ─────────────────────────────────────────────────────────────────────
+
+p_bar_da <- ggplot(
+  top_features_bar,
+  aes(x    = coef,
+      y    = feature_clean,
+      fill = .data[[bar_fill_var]])
+) +
+  geom_col(alpha = 0.85, width = 0.75) +
+  geom_errorbarh(
+    aes(xmin = coef - stderr, xmax = coef + stderr),
+    height    = 0.3,
+    color     = "grey25",
+    linewidth = 0.5
+  ) +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.5) +
+  scale_fill_manual(values = bar_fill_col) +
+  labs(
+    title    = bar_title,
+    subtitle = bar_subtitle,
+    x = sprintf(
+      "MaAsLin2 Coefficient (CLR)\n\u2190 Higher in %s  |  Higher in %s \u2192",
+      ref_group, comparison_group
+    ),
+    y    = NULL,
+    fill = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    plot.subtitle   = element_text(color = "grey40", size = 9),
+    legend.position = "bottom",
+    axis.text.y     = element_text(face = "italic", size = 9)
+  )
+
+print(p_bar_da)
+
+# ── Painel combinado ─────────────────────────────────────────────────────────
+
+p_da_panel <- p_volcano + p_bar_da +
+  plot_layout(widths = c(1.3, 1)) +
+  plot_annotation(
+    title    = "Differential Abundance Analysis — MaAsLin2 (CLR)",
+    subtitle = sprintf("Age %d d  \u00B7  %s vs %s  \u00B7  %d features tested",
+                       target_age, comparison_group, ref_group, n_tested),
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
+  )
+
+print(p_da_panel)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.7  Sumário final
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n")
+cat("╔══════════════════════════════════════════════════════════════════════╗\n")
+cat("║          SUMÁRIO — MaAsLin2 (CLR, v2 corrigido)                    ║\n")
+cat("╚══════════════════════════════════════════════════════════════════════╝\n")
+cat(sprintf("  Comparação         : %s vs %s (ref)\n",
+            comparison_group, ref_group))
+cat(sprintf("  Normalização       : CLR (Centered Log-Ratio)\n"))
+cat(sprintf("  Transform          : NONE\n"))
+cat(sprintf("  Correção           : BH (Benjamini-Hochberg)\n"))
+cat(sprintf("  Features brutas    : %d\n", ncol(maaslin_features)))
+cat(sprintf("  Após filtro prev   : %d  (>= %.0f%%)\n",
+            ncol(maaslin_features_filt), min_prev_threshold * 100))
+cat(sprintf("  Features testadas  : %d\n", n_tested))
+cat(sprintf("  q < 0.25           : %d\n", n_sig_25))
+cat(sprintf("  q < 0.10           : %d\n", n_sig_10))
+cat(sprintf("  q < 0.05           : %d\n", n_sig_05))
+cat(sprintf("  Output             : %s/\n", maaslin_output_dir))
+
+if (n_sig_25 == 0) {
+  cat("\n💡 Nenhuma feature FDR-significativa. Possíveis ações:\n")
+  cat("  1. Agregar no nível de GÊNERO (menos testes → mais poder)\n")
+  cat("  2. Aumentar filtro: min_prev_threshold <- 0.20\n")
+  cat("  3. Considerar ALDEx2, ANCOM-BC ou LEfSe como alternativas\n")
+  cat("  4. Analisar resultados nominais (p < 0.05) como exploratórios\n")
+  
+  n_nom_05 <- sum(maaslin_res$pval < 0.05, na.rm = TRUE)
+  cat(sprintf("  → Features com p nominal < 0.05: %d\n", n_nom_05))
+}
+
+cat("\n✅ MaAsLin2 (CLR) concluído.\n")
