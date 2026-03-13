@@ -1384,3 +1384,404 @@ if (n_sig_25 == 0) {
 }
 
 cat("\n✅ MaAsLin2 (CLR) concluído.\n")
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║         PARTE D — EXPORTAÇÃO: PLOTS (PNG 300 DPI) + TABELAS (CSV/XLSX)  ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+cat("\n")
+cat("╔══════════════════════════════════════════════════════════════════════╗\n")
+cat("║                   EXPORTAÇÃO DE RESULTADOS                         ║\n")
+cat("╚══════════════════════════════════════════════════════════════════════╝\n\n")
+
+# ==============================================================================
+# 10.1  Criar estrutura de diretórios
+# ==============================================================================
+
+output_base <- "results_HAV1801"
+
+dirs <- list(
+  alpha  = file.path(output_base, "plots", "alpha_diversity"),
+  beta   = file.path(output_base, "plots", "beta_diversity"),
+  da     = file.path(output_base, "plots", "diff_abundance"),
+  tables = file.path(output_base, "tables"),
+  rds    = file.path(output_base, "rds_objects")
+)
+
+walk(dirs, ~ dir.create(.x, recursive = TRUE, showWarnings = FALSE))
+
+cat(sprintf("📁 Diretório base: %s/\n\n", output_base))
+
+# ==============================================================================
+# 10.2  Configurações e helpers
+# ==============================================================================
+
+DPI <- 300   # Resolução para publicação
+# Para PDF vetorial (alternativa): trocar ggsave(..., device = "pdf")
+
+# Log de exportação
+export_log <- tibble(
+  file   = character(),
+  type   = character(),
+  status = character(),
+  size   = character()
+)
+
+# ── Helper: salvar ggplot com segurança ──────────────────────────────────────
+
+safe_ggsave <- function(path, plot_obj, w, h, dpi = DPI) {
+  ok <- tryCatch({
+    ggsave(path, plot = plot_obj, width = w, height = h,
+           dpi = dpi, bg = "white")
+    TRUE
+  }, error = function(e) {
+    cat(sprintf("  ✘ %s — %s\n", basename(path), conditionMessage(e)))
+    FALSE
+  })
+  
+  fsize <- if (ok && file.exists(path)) {
+    fs <- file.info(path)$size
+    if (fs > 1e6) sprintf("%.1f MB", fs / 1e6) else sprintf("%.0f KB", fs / 1e3)
+  } else { "—" }
+  
+  if (ok) cat(sprintf("  ✔ %-45s  %s\n", basename(path), fsize))
+  
+  export_log <<- bind_rows(export_log, tibble(
+    file = path, type = "plot", status = if (ok) "✔" else "✘", size = fsize
+  ))
+  invisible(ok)
+}
+
+# ── Helper: salvar ComplexHeatmap (device base R) ────────────────────────────
+
+safe_heatmap_png <- function(path, ht_obj, w, h, dpi = DPI) {
+  ok <- tryCatch({
+    png(path, width = w, height = h, units = "in", res = dpi)
+    draw(ht_obj, merge_legend = TRUE)
+    dev.off()
+    TRUE
+  }, error = function(e) {
+    try(dev.off(), silent = TRUE)
+    cat(sprintf("  ✘ %s — %s\n", basename(path), conditionMessage(e)))
+    FALSE
+  })
+  
+  fsize <- if (ok && file.exists(path)) {
+    fs <- file.info(path)$size
+    if (fs > 1e6) sprintf("%.1f MB", fs / 1e6) else sprintf("%.0f KB", fs / 1e3)
+  } else { "—" }
+  
+  if (ok) cat(sprintf("  ✔ %-45s  %s\n", basename(path), fsize))
+  
+  export_log <<- bind_rows(export_log, tibble(
+    file = path, type = "plot", status = if (ok) "✔" else "✘", size = fsize
+  ))
+  invisible(ok)
+}
+
+# ── Helper: salvar tabela CSV ────────────────────────────────────────────────
+
+safe_csv <- function(df, path) {
+  ok <- tryCatch({
+    write_csv(df, path)
+    TRUE
+  }, error = function(e) {
+    cat(sprintf("  ✘ %s — %s\n", basename(path), conditionMessage(e)))
+    FALSE
+  })
+  
+  fsize <- if (ok && file.exists(path)) {
+    sprintf("%d rows × %d cols", nrow(df), ncol(df))
+  } else { "—" }
+  
+  if (ok) cat(sprintf("  ✔ %-45s  %s\n", basename(path), fsize))
+  
+  export_log <<- bind_rows(export_log, tibble(
+    file = path, type = "table", status = if (ok) "✔" else "✘", size = fsize
+  ))
+  invisible(ok)
+}
+
+# ── Helper: salvar RDS ───────────────────────────────────────────────────────
+
+safe_rds <- function(obj, path) {
+  ok <- tryCatch({ saveRDS(obj, path); TRUE },
+                 error = function(e) { FALSE })
+  
+  fsize <- if (ok && file.exists(path)) {
+    fs <- file.info(path)$size
+    if (fs > 1e6) sprintf("%.1f MB", fs / 1e6) else sprintf("%.0f KB", fs / 1e3)
+  } else { "—" }
+  
+  status <- if (ok) "✔" else "✘"
+  cat(sprintf("  %s %-45s  %s\n", status, basename(path), fsize))
+  
+  export_log <<- bind_rows(export_log, tibble(
+    file = path, type = "rds", status = status, size = fsize
+  ))
+  invisible(ok)
+}
+
+# ==============================================================================
+# 10.3  PLOTS — Alfa Diversidade
+# ==============================================================================
+
+cat("── Plots: Alfa Diversidade ─────────────────────────────────────────\n")
+
+safe_ggsave(file.path(dirs$alpha, "alpha_violin_boxplot_all_metrics.png"),
+            p_alpha_all, w = 10, h = 8)
+
+safe_ggsave(file.path(dirs$alpha, "alpha_panel_2x2_individual.png"),
+            p_alpha_panel, w = 12, h = 10)
+
+safe_ggsave(file.path(dirs$alpha, "alpha_observed.png"),
+            p_observed, w = 5.5, h = 5)
+
+safe_ggsave(file.path(dirs$alpha, "alpha_chao1.png"),
+            p_chao1, w = 5.5, h = 5)
+
+safe_ggsave(file.path(dirs$alpha, "alpha_shannon.png"),
+            p_shannon, w = 5.5, h = 5)
+
+safe_ggsave(file.path(dirs$alpha, "alpha_simpson.png"),
+            p_simpson, w = 5.5, h = 5)
+
+# ==============================================================================
+# 10.4  PLOTS — Beta Diversidade
+# ==============================================================================
+
+cat("\n── Plots: Beta Diversidade ─────────────────────────────────────────\n")
+
+# PCoA individuais
+for (nm in names(pcoa_plots)) {
+  slug <- str_to_lower(str_replace_all(nm, "[- ]+", "_"))
+  safe_ggsave(
+    file.path(dirs$beta, sprintf("beta_pcoa_%s.png", slug)),
+    pcoa_plots[[nm]], w = 8, h = 7
+  )
+}
+
+# PCoA painel
+safe_ggsave(file.path(dirs$beta, "beta_pcoa_panel.png"),
+            p_pcoa_panel,
+            w = 7 * length(pcoa_plots), h = 7)
+
+# NMDS individuais
+for (nm in names(nmds_plots)) {
+  slug <- str_to_lower(str_replace_all(nm, "[- ]+", "_"))
+  safe_ggsave(
+    file.path(dirs$beta, sprintf("beta_nmds_%s.png", slug)),
+    nmds_plots[[nm]], w = 8, h = 7
+  )
+}
+
+# NMDS painel
+safe_ggsave(file.path(dirs$beta, "beta_nmds_panel.png"),
+            p_nmds_panel,
+            w = 7 * length(nmds_plots), h = 7)
+
+# ComplexHeatmap (device base R, não é ggplot)
+if (exists("ht")) {
+  safe_heatmap_png(
+    file.path(dirs$beta, "beta_heatmap_top_species_zscore.png"),
+    ht, w = 14, h = 10
+  )
+}
+
+# ==============================================================================
+# 10.5  PLOTS — Abundância Diferencial (MaAsLin2)
+# ==============================================================================
+
+cat("\n── Plots: Abundância Diferencial ───────────────────────────────────\n")
+
+if (exists("p_volcano")) {
+  safe_ggsave(file.path(dirs$da, "da_volcano_clr.png"),
+              p_volcano, w = 10, h = 8)
+}
+
+if (exists("p_bar_da")) {
+  safe_ggsave(file.path(dirs$da, "da_barplot_effect_size.png"),
+              p_bar_da, w = 9, h = 8)
+}
+
+if (exists("p_da_panel")) {
+  safe_ggsave(file.path(dirs$da, "da_panel_volcano_bar.png"),
+              p_da_panel, w = 18, h = 8)
+}
+
+# ==============================================================================
+# 10.6  TABELAS — CSV (uma por análise)
+# ==============================================================================
+
+cat("\n── Tabelas: Alfa Diversidade ───────────────────────────────────────\n")
+
+safe_csv(alpha_div,
+         file.path(dirs$tables, "alpha_diversity_per_sample.csv"))
+
+safe_csv(alpha_long,
+         file.path(dirs$tables, "alpha_diversity_long_format.csv"))
+
+safe_csv(alpha_summary,
+         file.path(dirs$tables, "alpha_descriptive_statistics.csv"))
+
+safe_csv(kw_results,
+         file.path(dirs$tables, "alpha_kruskal_wallis.csv"))
+
+safe_csv(wx_results,
+         file.path(dirs$tables, "alpha_wilcoxon_ranksum.csv"))
+
+cat("\n── Tabelas: Beta Diversidade ───────────────────────────────────────\n")
+
+safe_csv(permanova_results,
+         file.path(dirs$tables, "beta_permanova.csv"))
+
+safe_csv(anosim_results,
+         file.path(dirs$tables, "beta_anosim.csv"))
+
+safe_csv(betadisp_results,
+         file.path(dirs$tables, "beta_betadisper_homogeneity.csv"))
+
+# Matrizes de distância como CSV (útil para análises externas)
+for (nm in names(dist_list)) {
+  slug <- str_to_lower(str_replace_all(nm, "[- ]+", "_"))
+  dm   <- as.matrix(dist_list[[nm]])
+  colnames(dm) <- fix_id(colnames(dm))
+  rownames(dm) <- fix_id(rownames(dm))
+  safe_csv(
+    as.data.frame(dm) %>% rownames_to_column("sample_id"),
+    file.path(dirs$tables, sprintf("beta_distance_matrix_%s.csv", slug))
+  )
+}
+
+cat("\n── Tabelas: Abundância Diferencial ─────────────────────────────────\n")
+
+if (exists("maaslin_res")) {
+  safe_csv(
+    maaslin_res %>% select(-qval_safe, -neg_log10_q, -neg_log10_p),
+    file.path(dirs$tables, "da_maaslin2_all_results.csv")
+  )
+  
+  # Apenas significativas (se existirem)
+  sig_only <- maaslin_res %>% filter(qval < q_threshold)
+  if (nrow(sig_only) > 0) {
+    safe_csv(
+      sig_only %>% select(-qval_safe, -neg_log10_q, -neg_log10_p),
+      file.path(dirs$tables, "da_maaslin2_significant_only.csv")
+    )
+  }
+  
+  # Top features do bar plot
+  if (exists("top_features_bar") && nrow(top_features_bar) > 0) {
+    safe_csv(
+      top_features_bar,
+      file.path(dirs$tables, "da_maaslin2_top_features_barplot.csv")
+    )
+  }
+}
+
+# ==============================================================================
+# 10.7  EXCEL CONSOLIDADO (todas as tabelas em abas)
+# ==============================================================================
+
+cat("\n── Excel Consolidado ───────────────────────────────────────────────\n")
+
+# Monta lista de sheets com verificação de existência
+sheets <- list()
+
+if (exists("alpha_summary"))      sheets[["Alpha_Descriptive"]]   <- alpha_summary
+if (exists("kw_results"))         sheets[["Alpha_KruskalWallis"]] <- kw_results
+if (exists("wx_results"))         sheets[["Alpha_Wilcoxon"]]      <- wx_results
+if (exists("alpha_div"))          sheets[["Alpha_PerSample"]]     <- alpha_div
+if (exists("permanova_results"))  sheets[["Beta_PERMANOVA"]]      <- permanova_results
+if (exists("anosim_results"))     sheets[["Beta_ANOSIM"]]         <- anosim_results
+if (exists("betadisp_results"))   sheets[["Beta_Betadisper"]]     <- betadisp_results
+
+if (exists("maaslin_res")) {
+  sheets[["DA_MaAsLin2_Full"]] <- maaslin_res %>%
+    select(-qval_safe, -neg_log10_q, -neg_log10_p)
+  
+  if (nrow(sig_only) > 0) {
+    sheets[["DA_MaAsLin2_Significant"]] <- sig_only %>%
+      select(-qval_safe, -neg_log10_q, -neg_log10_p)
+  }
+}
+
+xlsx_path <- file.path(dirs$tables, "HAV1801_all_statistics.xlsx")
+
+if (requireNamespace("writexl", quietly = TRUE)) {
+  tryCatch({
+    writexl::write_xlsx(sheets, xlsx_path)
+    fsize <- file.info(xlsx_path)$size
+    fsize_str <- if (fsize > 1e6) sprintf("%.1f MB", fsize/1e6)
+    else sprintf("%.0f KB", fsize/1e3)
+    cat(sprintf("  ✔ %-45s  %d abas  %s\n",
+                basename(xlsx_path), length(sheets), fsize_str))
+    export_log <- bind_rows(export_log, tibble(
+      file = xlsx_path, type = "excel", status = "✔", size = fsize_str
+    ))
+  }, error = function(e) {
+    cat(sprintf("  ✘ Excel — %s\n", conditionMessage(e)))
+  })
+} else {
+  cat("  ℹ Pacote 'writexl' não instalado — Excel não gerado\n")
+  cat("    Para habilitar: install.packages('writexl')\n")
+}
+
+# ==============================================================================
+# 10.8  OBJETOS R (RDS) — para recarregar sem re-rodar o pipeline
+# ==============================================================================
+
+cat("\n── Objetos R (RDS) ─────────────────────────────────────────────────\n")
+
+if (exists("ps_work"))     safe_rds(ps_work,     file.path(dirs$rds, "phyloseq_work.rds"))
+if (exists("alpha_div"))   safe_rds(alpha_div,   file.path(dirs$rds, "alpha_diversity.rds"))
+if (exists("dist_list"))   safe_rds(dist_list,   file.path(dirs$rds, "distance_matrices.rds"))
+if (exists("maaslin_fit")) safe_rds(maaslin_fit, file.path(dirs$rds, "maaslin2_fit_object.rds"))
+
+# ==============================================================================
+# 10.9  SUMÁRIO FINAL DE EXPORTAÇÃO
+# ==============================================================================
+
+n_plots  <- sum(export_log$type == "plot"  & export_log$status == "✔")
+n_tables <- sum(export_log$type == "table" & export_log$status == "✔")
+n_excel  <- sum(export_log$type == "excel" & export_log$status == "✔")
+n_rds    <- sum(export_log$type == "rds"   & export_log$status == "✔")
+n_fail   <- sum(export_log$status == "✘")
+
+cat("\n")
+cat("╔══════════════════════════════════════════════════════════════════════╗\n")
+cat("║                  SUMÁRIO DE EXPORTAÇÃO                             ║\n")
+cat("╠══════════════════════════════════════════════════════════════════════╣\n")
+cat(sprintf("║  📁 Diretório    : %-48s ║\n", paste0(output_base, "/")))
+cat(sprintf("║  🖼️  Plots (PNG)  : %-48s ║\n", sprintf("%d arquivos  (%d DPI)", n_plots, DPI)))
+cat(sprintf("║  📋 Tabelas (CSV): %-48s ║\n", sprintf("%d arquivos", n_tables)))
+cat(sprintf("║  📊 Excel (XLSX) : %-48s ║\n", sprintf("%d arquivo   (%d abas)", n_excel, length(sheets))))
+cat(sprintf("║  💾 RDS          : %-48s ║\n", sprintf("%d objetos", n_rds)))
+cat(sprintf("║  ✔ Total OK      : %-48s ║\n", sprintf("%d", n_plots + n_tables + n_excel + n_rds)))
+if (n_fail > 0) {
+  cat(sprintf("║  ✘ Falhas        : %-48s ║\n", sprintf("%d", n_fail)))
+}
+cat("╚══════════════════════════════════════════════════════════════════════╝\n")
+
+# Listar falhas se houver
+if (n_fail > 0) {
+  cat("\n⚠ Arquivos com falha:\n")
+  export_log %>%
+    filter(status == "✘") %>%
+    pull(file) %>%
+    walk(~ cat(sprintf("  • %s\n", .x)))
+}
+
+# Árvore de diretórios final
+cat(sprintf("\n📂 Estrutura gerada:\n"))
+cat(sprintf("  %s/\n", output_base))
+cat(sprintf("  ├── plots/\n"))
+cat(sprintf("  │   ├── alpha_diversity/     (%d PNGs)\n", n_plots_alpha <- sum(str_detect(export_log$file, "alpha") & export_log$type == "plot" & export_log$status == "✔")))
+cat(sprintf("  │   ├── beta_diversity/      (%d PNGs)\n", n_plots_beta  <- sum(str_detect(export_log$file, "beta")  & export_log$type == "plot" & export_log$status == "✔")))
+cat(sprintf("  │   └── diff_abundance/      (%d PNGs)\n", n_plots_da    <- sum(str_detect(export_log$file, "da_|diff") & export_log$type == "plot" & export_log$status == "✔")))
+cat(sprintf("  ├── tables/                  (%d CSVs + %d XLSX)\n", n_tables, n_excel))
+cat(sprintf("  └── rds_objects/             (%d RDS)\n", n_rds))
+
+cat("\n✅ Exportação concluída!\n")
+cat("💡 Para recarregar objetos depois: obj <- readRDS('results_HAV1801/rds_objects/arquivo.rds')\n")
