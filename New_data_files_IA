@@ -1,5 +1,5 @@
 # ==============================================================================
-# PIPELINE ETL DE MICROBIOMA - HAV1801
+# PIPELINE ETL DE MICROBIOMA E ALFA DIVERSIDADE - HAV1801
 # ==============================================================================
 
 # Carregar pacotes necessários
@@ -15,27 +15,20 @@ suppressPackageStartupMessages({
 # ==============================================================================
 cat("1. Processando metadados...\n")
 
-# Lemos os metadados, limpamos nomes de colunas e ajustamos os IDs
-# O ID original tem pontos e um underline no final (ex: HAV1801.12.10.18_1A_)
 metadata <- read_tsv("HAV1801_meta.txt", show_col_types = FALSE) %>% 
   clean_names() %>% 
   mutate(
     sample_id = str_replace_all(sample, "\\.", "-"),
     sample_id = str_remove(sample_id, "_$")
   ) %>% 
-  # Manter apenas as colunas de interesse para simplificar os joins depois
   select(sample_id, treatment, age)
 
-# Vetor com IDs válidos que existem no metadado
 valid_samples <- metadata$sample_id
 cat("Total de amostras no metadado:", length(valid_samples), "\n\n")
 
 # ==============================================================================
 # 2. FUNÇÃO CORE DO ETL PARA PADRONIZAÇÃO
 # ==============================================================================
-# Esta função carrega qualquer arquivo do SevenBridges, avalia a estrutura,
-# padroniza para o formato longo e anexa o treatment e age.
-
 process_sb_data <- function(filepath, feature_col_name = "Gene_Name") {
   
   if (!file.exists(filepath)) {
@@ -45,44 +38,33 @@ process_sb_data <- function(filepath, feature_col_name = "Gene_Name") {
   
   df_raw <- read_tsv(filepath, show_col_types = FALSE)
   
-  # VERIFICAÇÃO 1: Formato Longo (Ex: VF e AMR vêm com Sample_ID e readCount)
   if ("Sample_ID" %in% colnames(df_raw)) {
     df_clean <- df_raw %>% 
       rename(sample_id = Sample_ID, feature = all_of(feature_col_name), count = readCount) %>% 
       select(sample_id, feature, count) %>% 
-      # Algumas contagens podem vir duplicadas para o mesmo gene dependendo do alinhamento
       group_by(sample_id, feature) %>% 
       summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
     
   } else {
-    # VERIFICAÇÃO 2: Formato Largo (Ex: Taxonomia, KO, EC, CAZy, COGs)
-    
-    # Se for taxonomia, unir as 7 colunas em uma única string
     tax_cols <- c("k", "p", "c", "o", "f", "g", "s")
     if (all(tax_cols %in% colnames(df_raw))) {
       df_raw <- df_raw %>% 
         unite("feature", all_of(tax_cols), sep = "|", remove = TRUE)
     } else {
-      # Para os outros (KO, EC, etc), a primeira coluna é a feature
       colnames(df_raw)[1] <- "feature"
     }
     
-    # Pivotar o dataframe largo para o formato longo
     df_clean <- df_raw %>% 
       pivot_longer(
         cols = -feature, 
         names_to = "sample_id", 
         values_to = "count"
       ) %>% 
-      # Remover NAs ou contagens zeradas para deixar o objeto leve
       filter(count > 0)
   }
   
-  # APLICAR METADADOS E FILTRAR
   df_final <- df_clean %>% 
-    # Filtrar removendo amostras que NÃO estão no metadado
     filter(sample_id %in% valid_samples) %>% 
-    # Adicionar metadados (treatment e age)
     left_join(metadata, by = "sample_id")
   
   return(df_final)
@@ -93,7 +75,6 @@ process_sb_data <- function(filepath, feature_col_name = "Gene_Name") {
 # ==============================================================================
 cat("2. Aplicando pipeline ETL nos arquivos...\n")
 
-# Processando um a um. Note que para VF e AMR precisamos indicar o nome da coluna de feature.
 dados_tax  <- process_sb_data("hav1801_tax_counts.tsv")
 dados_ko   <- process_sb_data("hav1801_fun_KO_counts.txt")
 dados_ec   <- process_sb_data("hav1801_fun_EC_count.txt")
@@ -102,212 +83,862 @@ dados_cogs <- process_sb_data("hav1801_fun_COGs_count.txt")
 dados_vf   <- process_sb_data("hav1801_fun_VF_counts.tsv", feature_col_name = "VF_Name")
 dados_amr  <- process_sb_data("hav1801_fun_AMR_counts.tsv", feature_col_name = "Gene_Name")
 
-cat("ETL concluído. Dados padronizados em formato longo criados.\n\n")
-
-# Exemplo de visualização da estrutura padronizada (usando taxonomia):
-# print(head(dados_tax))
+cat("ETL concluído. Dados padronizados.\n\n")
 
 
 # ==============================================================================
-# FILTRAGEM E CRIAÇÃO DO OBJETO PHYLOSEQ (CORRIGIDO)
+# 4. FILTRAGEM E CRIAÇÃO DO OBJETO PHYLOSEQ
 # ==============================================================================
+cat("3. Aplicando filtros e criando objeto phyloseq...\n")
 
-cat("Aplicando filtros e criando objeto phyloseq...\n")
-
-# 1. Definir parâmetros de filtro
+# Parâmetros
 target_age <- 42
 target_treatments <- c("control", "m2-102")
 
-# 2. Filtrar metadata (usando as colunas corretas)
-cat("Colunas disponíveis no metadata:", paste(colnames(metadata), collapse = ", "), "\n")
-
+# Filtrar Metadados
 metadata_filtrado <- metadata %>%
-  filter(
-    age == target_age,                      # ✅ Usar apenas 'age' (não 'age_group')
-    treatment %in% target_treatments
-  ) %>%
-  droplevels()  # Remove níveis não utilizados dos fatores
+  filter(age == target_age, treatment %in% target_treatments) %>%
+  droplevels()
 
-# 3. Verificar amostras retidas
-cat("Amostras após filtro:", nrow(metadata_filtrado), "\n")
-cat("Tratamentos:", paste(unique(metadata_filtrado$treatment), collapse = ", "), "\n")
+if (nrow(metadata_filtrado) == 0) stop("❌ Nenhuma amostra passou nos filtros de metadata!")
 
-# 4. Verificar se temos amostras suficientes
-if (nrow(metadata_filtrado) == 0) {
-  stop("❌ Nenhuma amostra passou pelos filtros! Verifique os valores de age e treatment.")
-}
+# Filtrar Matriz de Taxonomia (Usando dados_tax criado no ETL)
+dados_tax_filtrado <- dados_tax %>%
+  filter(age == target_age, treatment %in% target_treatments)
 
-# 5. Filtrar dados taxonômicos 
-# Vamos usar tax_ready que foi criado no seu código original
-if (exists("tax_ready") && !is.null(tax_ready)) {
-  
-  # Verificar colunas disponíveis em tax_ready
-  cat("Colunas em tax_ready:", paste(colnames(tax_ready), collapse = ", "), "\n")
-  
-  dados_tax_filtrado <- tax_ready %>%
-    filter(treatment %in% target_treatments)
-  
-  # Se tax_ready tem coluna age, filtrar também por idade
-  if ("age" %in% colnames(tax_ready)) {
-    dados_tax_filtrado <- dados_tax_filtrado %>%
-      filter(age == target_age)
-  }
-  
-} else {
-  stop("❌ Objeto 'tax_ready' não encontrado! Certifique-se de executar o código de processamento primeiro.")
-}
-
-cat("Features taxonômicas após filtro:", nrow(dados_tax_filtrado), "\n")
-
-# 6. Função para criar objeto phyloseq (corrigida)
+# Função simplificada e robusta para criar Phyloseq
 create_phyloseq_object <- function(tax_data, meta_data) {
   
-  cat("Criando objeto phyloseq...\n")
-  
-  # Verificar colunas necessárias
-  required_cols_tax <- c("sample_clean", "feature", "count")
-  required_cols_meta <- c("sample_clean", "treatment")  # Mudei de sample_id para sample_clean
-  
-  if (!all(required_cols_tax %in% colnames(tax_data))) {
-    missing_tax <- setdiff(required_cols_tax, colnames(tax_data))
-    stop("Colunas faltando em tax_data: ", paste(missing_tax, collapse = ", "))
-  }
-  
-  # Se metadata tem sample_id ao invés de sample_clean, vamos renomear
-  if ("sample_id" %in% colnames(meta_data) && !"sample_clean" %in% colnames(meta_data)) {
-    meta_data <- meta_data %>% rename(sample_clean = sample_id)
-  }
-  
-  if (!all(required_cols_meta %in% colnames(meta_data))) {
-    missing_meta <- setdiff(required_cols_meta, colnames(meta_data))
-    stop("Colunas faltando em meta_data: ", paste(missing_meta, collapse = ", "))
-  }
-  
-  # Converter para matriz larga (amostras nas colunas, features nas linhas)
+  # 1. Matriz de Abundância (OTU/ASV)
   otu_wide <- tax_data %>%
-    select(sample_clean, feature, count) %>%
-    group_by(sample_clean, feature) %>%
-    summarise(count = sum(count, na.rm = TRUE), .groups = "drop") %>%  # Somar duplicatas
-    pivot_wider(names_from = sample_clean, values_from = count, values_fill = 0) %>%
+    select(sample_id, feature, count) %>%
+    group_by(sample_id, feature) %>%
+    summarise(count = sum(count, na.rm = TRUE), .groups = "drop") %>% 
+    pivot_wider(names_from = sample_id, values_from = count, values_fill = 0) %>%
     column_to_rownames("feature") %>%
     as.matrix()
   
-  cat("Matriz OTU criada:", nrow(otu_wide), "features x", ncol(otu_wide), "amostras\n")
+  # 2. Tabela de Taxonomia (Separando os níveis taxonômicos)
+  tax_table_matrix <- tax_data %>%
+    select(feature) %>%
+    distinct() %>%
+    separate(feature, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), 
+             sep = "\\|", fill = "right", remove = FALSE) %>%
+    column_to_rownames("feature") %>%
+    as.matrix()
   
-  # Criar tabela de taxonomia se disponível
-  if ("feature" %in% colnames(tax_data) && any(grepl("\\|", tax_data$feature))) {
-    tax_table <- tax_data %>%
-      select(feature) %>%
-      distinct() %>%
-      separate(feature, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), 
-               sep = "\\|", fill = "right", remove = FALSE) %>%
-      column_to_rownames("feature") %>%
-      as.matrix()
-    cat("Tabela de taxonomia criada\n")
-  } else {
-    tax_table <- NULL
-    cat("Tabela de taxonomia não criada (sem informação hierárquica)\n")
-  }
-  
-  # Preparar metadados
+  # 3. Tabela de Metadados
   sample_info <- meta_data %>%
-    column_to_rownames("sample_clean") %>%
+    column_to_rownames("sample_id") %>%
     as.data.frame()
   
-  # Verificar consistência entre amostras
-  common_samples <- intersect(colnames(otu_wide), rownames(sample_info))
-  cat("Amostras em comum:", length(common_samples), "\n")
-  
-  if (length(common_samples) == 0) {
-    cat("Amostras em otu_wide:", paste(head(colnames(otu_wide)), collapse = ", "), "...\n")
-    cat("Amostras em sample_info:", paste(head(rownames(sample_info)), collapse = ", "), "...\n")
-    stop("Nenhuma amostra em comum entre dados e metadados!")
-  }
-  
-  # Filtrar para amostras comuns
-  otu_wide <- otu_wide[, common_samples, drop = FALSE]
-  sample_info <- sample_info[common_samples, , drop = FALSE]
-  
-  # Remover features com soma zero
-  otu_wide <- otu_wide[rowSums(otu_wide) > 0, , drop = FALSE]
-  
-  cat("Matriz final:", nrow(otu_wide), "features x", ncol(otu_wide), "amostras\n")
-  
-  # Criar objeto phyloseq
-  if (!is.null(tax_table)) {
-    # Com taxonomia
-    common_features <- intersect(rownames(otu_wide), rownames(tax_table))
-    otu_wide <- otu_wide[common_features, , drop = FALSE]
-    tax_table <- tax_table[common_features, , drop = FALSE]
-    
-    physeq <- phyloseq(
-      otu_table(otu_wide, taxa_are_rows = TRUE),
-      tax_table(tax_table),
-      sample_data(sample_info)
-    )
-  } else {
-    # Sem taxonomia
-    physeq <- phyloseq(
-      otu_table(otu_wide, taxa_are_rows = TRUE),
-      sample_data(sample_info)
-    )
-  }
+  # 4. Criar o objeto combinando os 3 elementos
+  physeq <- phyloseq(
+    otu_table(otu_wide, taxa_are_rows = TRUE),
+    tax_table(tax_table_matrix),
+    sample_data(sample_info)
+  )
   
   return(physeq)
 }
 
-# 7. Criar objeto phyloseq
-tryCatch({
-  physeq_tax_filtrado <- create_phyloseq_object(dados_tax_filtrado, metadata_filtrado)
+physeq_tax_filtrado <- create_phyloseq_object(dados_tax_filtrado, metadata_filtrado)
+
+cat("\n=== RESUMO DO OBJETO PHYLOSEQ ===\n")
+print(physeq_tax_filtrado)
+
+
+# ==============================================================================
+# 5. CÁLCULO DE DIVERSIDADE ALFA
+# ==============================================================================
+cat("\n4. Calculando diversidade alfa...\n")
+
+# 1. Plot visual (Boxplot)
+p_diversidade <- plot_richness(
+  physeq_tax_filtrado, 
+  x = "treatment", 
+  measures = c("Observed", "Chao1", "Shannon", "Simpson"), 
+  color = "treatment"
+) + 
+  geom_boxplot(alpha = 0.7, width = 0.5, outlier.shape = NA) + 
+  geom_point(size = 2, alpha = 0.8, position = position_jitter(width = 0.2)) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  labs(
+    title = "Diversidade Alfa por Tratamento",
+    subtitle = "Idade: 42 dias | Comparação: Control vs M2-102",
+    x = "Tratamento", 
+    y = "Índice de Diversidade",
+    color = "Tratamento"
+  )
+
+print(p_diversidade)
+
+# 2. Extrair dados para Análises Estatísticas e Formato Longo
+alpha_div <- estimate_richness(
+  physeq_tax_filtrado, 
+  measures = c("Observed", "Chao1", "Shannon", "Simpson")
+) %>%
+  rownames_to_column("sample_id") %>%
+  # Limpar o nome das amostras (o phyloseq às vezes adiciona "X" no começo de rownames com números)
+  mutate(sample_id = str_remove(sample_id, "^X")) %>% 
+  left_join(metadata_filtrado, by = "sample_id")
+
+# 3. Converter para Formato Longo (caso você queira fazer ggplot manuais depois)
+alpha_long <- alpha_div %>%
+  select(sample_id, treatment, age, Observed, Chao1, Shannon, Simpson) %>%
+  pivot_longer(
+    cols = c(Observed, Chao1, Shannon, Simpson),
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(Metric = factor(Metric, levels = c("Observed", "Chao1", "Shannon", "Simpson")))
+
+cat("✅ Pipeline concluído com sucesso!\n")
+cat("📊 Seu dataframe estatístico final é o 'alpha_div' ou 'alpha_long'.\n")
+
+
+# ==============================================================================
+# 5. PACOTES ADICIONAIS + HELPERS
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(ggpubr)          # stat_compare_means (wilcox brackets)
+  library(patchwork)       # layouts: (|) e (/)
+  library(ape)             # pcoa()
+  library(ggrepel)         # geom_text_repel nos ordinations
+  library(ComplexHeatmap)  # heatmap publication-ready
+  library(circlize)        # colorRamp2
+  library(RColorBrewer)    # paletas
+})
+
+# Helper: reverter mangling que o R/phyloseq faz nos sample names
+# make.names() adiciona "X" em IDs numéricos e troca "-" por "."
+fix_id <- function(x) {
+  x %>%
+    str_remove("^X") %>%
+    str_replace_all("\\.", "-")
+}
+
+# ==============================================================================
+# 6. (OPCIONAL) RAREFAÇÃO
+# ==============================================================================
+# Rarefação equaliza profundidade de sequenciamento entre amostras.
+# Se não quiser rarefar, comente as 3 linhas abaixo e descomente a 4ª.
+
+set.seed(42)
+rare_depth <- min(sample_sums(physeq_tax_filtrado))
+cat(sprintf("✔ Profundidade de rarefação: %s reads/amostra\n",
+            format(rare_depth, big.mark = ",")))
+
+ps_work <- rarefy_even_depth(
+  physeq_tax_filtrado,
+  sample.size = rare_depth,
+  rngseed     = 42,
+  verbose     = FALSE
+)
+
+# Se preferir NÃO rarefar, use:
+# ps_work    <- physeq_tax_filtrado
+# rare_depth <- NA
+
+cat(sprintf("✔ Objeto de trabalho: %d amostras × %d taxa\n",
+            nsamples(ps_work), ntaxa(ps_work)))
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                     PARTE A — DIVERSIDADE ALFA                           ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ==============================================================================
+# 7.1  Calcular métricas de alfa diversidade
+# ==============================================================================
+
+alpha_div <- estimate_richness(
+  ps_work,
+  measures = c("Observed", "Chao1", "Shannon", "Simpson")
+) %>%
+  rownames_to_column("sample_id") %>%
+  mutate(sample_id = fix_id(sample_id)) %>%
+  left_join(
+    metadata_filtrado %>% select(sample_id, treatment),
+    by = "sample_id"
+  )
+
+# Validar join
+if (any(is.na(alpha_div$treatment))) {
+  warning("⚠ Join falhou — amostras sem tratamento atribuído:")
+  print(alpha_div %>% filter(is.na(treatment)) %>% select(sample_id, treatment))
+} else {
+  cat(sprintf("✔ Alfa diversidade: %d amostras em %d grupos\n",
+              nrow(alpha_div), n_distinct(alpha_div$treatment)))
+}
+
+# Formato longo para ggplot
+alpha_long <- alpha_div %>%
+  select(sample_id, treatment, Observed, Chao1, Shannon, Simpson) %>%
+  pivot_longer(
+    cols      = c(Observed, Chao1, Shannon, Simpson),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(Metric = factor(Metric,
+                         levels = c("Observed", "Chao1", "Shannon", "Simpson")))
+
+# ==============================================================================
+# 7.2  Paleta de cores & lista de comparações
+# ==============================================================================
+
+groups_ordered   <- sort(unique(alpha_long$treatment))
+group_colors     <- setNames(brewer.pal(3, "Set1")[1:2], groups_ordered)
+comparisons_list <- list(groups_ordered)
+
+cat(sprintf("Grupos: %s\n", paste(groups_ordered, collapse = " vs ")))
+
+# ==============================================================================
+# 7.3  Faceted violin + boxplot — 4 métricas juntas
+# ==============================================================================
+
+subtitle_text <- if (!is.na(rare_depth)) {
+  sprintf("Rarefied to %s reads/sample · Age %d d · Wilcoxon p-value shown",
+          format(rare_depth, big.mark = ","), target_age)
+} else {
+  sprintf("Non-rarefied · Age %d d · Wilcoxon rank-sum p-value shown",
+          target_age)
+}
+
+p_alpha_all <- ggplot(
+  alpha_long,
+  aes(x = treatment, y = Value, fill = treatment, color = treatment)
+) +
+  geom_violin(alpha = 0.35, linewidth = 0.6, trim = FALSE) +
+  geom_boxplot(width = 0.18, alpha = 0.80, outlier.shape = NA, color = "black") +
+  geom_jitter(width = 0.08, size = 1.8, alpha = 0.70, show.legend = FALSE) +
+  stat_compare_means(
+    method       = "wilcox.test",
+    comparisons  = comparisons_list,
+    label        = "p.format",
+    tip.length   = 0.01,
+    bracket.size = 0.4,
+    size         = 3.8
+  ) +
+  scale_fill_manual(values  = group_colors) +
+  scale_color_manual(values = group_colors) +
+  facet_wrap(~ Metric, scales = "free_y", nrow = 2) +
+  labs(
+    title    = "Alpha Diversity — Taxonomic Profiles",
+    subtitle = subtitle_text,
+    x        = NULL,
+    y        = "Diversity Value",
+    fill     = "Treatment",
+    color    = "Treatment"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold"),
+    plot.subtitle    = element_text(color = "grey40", size = 9.5),
+    strip.text       = element_text(face = "bold", size = 12),
+    strip.background = element_rect(fill = "grey92", color = NA),
+    legend.position  = "bottom",
+    axis.text.x      = element_text(angle = 20, hjust = 1)
+  )
+
+print(p_alpha_all)
+
+# ==============================================================================
+# 7.4  Plots individuais — painel 2×2 (publicação)
+# ==============================================================================
+
+plot_alpha_metric <- function(metric_name, y_label) {
   
-  # 8. Verificar o objeto criado
-  cat("\n=== RESUMO DO OBJETO PHYLOSEQ ===\n")
-  print(physeq_tax_filtrado)
+  dat <- alpha_long %>% filter(Metric == metric_name)
   
-  cat("\nAmostras:", nsamples(physeq_tax_filtrado))
-  cat("\nFeatures (OTUs/ASVs):", ntaxa(physeq_tax_filtrado))
-  cat("\nTratamentos:", paste(unique(sample_data(physeq_tax_filtrado)$treatment), collapse = ", "), "\n")
-  
-  # 9. Calcular diversidade alfa
-  cat("\nCalculando diversidade alfa...\n")
-  
-  # Plot de diversidade
-  p_diversidade <- plot_richness(physeq_tax_filtrado, 
-                                 x = "treatment", 
-                                 measures = c("Shannon", "Simpson", "Chao1"), 
-                                 color = "treatment") + 
-    geom_boxplot(alpha = 0.7, width = 0.5) + 
-    geom_point(size = 2.5, alpha = 0.8, position = position_jitter(width = 0.2)) +
-    scale_color_brewer(palette = "Set1") +
-    theme_minimal(base_size = 12) +
-    theme(
-      plot.title = element_text(face = "bold"),
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      strip.text = element_text(face = "bold")
+  ggplot(dat, aes(x = treatment, y = Value,
+                  fill = treatment, color = treatment)) +
+    geom_violin(alpha = 0.30, linewidth = 0.6, trim = FALSE) +
+    geom_boxplot(width = 0.20, alpha = 0.80,
+                 outlier.shape = NA, color = "black") +
+    geom_jitter(width = 0.08, size = 2.2, alpha = 0.75,
+                show.legend = FALSE) +
+    stat_compare_means(
+      method      = "wilcox.test",
+      comparisons = comparisons_list,
+      label       = "p.format",
+      tip.length  = 0.01,
+      size        = 3.8
     ) +
+    scale_fill_manual(values  = group_colors) +
+    scale_color_manual(values = group_colors) +
+    labs(title = metric_name, x = NULL, y = y_label) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title      = element_text(face = "bold", hjust = 0.5),
+      legend.position = "none",
+      axis.text.x     = element_text(angle = 20, hjust = 1)
+    )
+}
+
+p_observed <- plot_alpha_metric("Observed", "Observed Species (Richness)")
+p_chao1    <- plot_alpha_metric("Chao1",    "Chao1 Estimated Richness")
+p_shannon  <- plot_alpha_metric("Shannon",  "Shannon Diversity Index")
+p_simpson  <- plot_alpha_metric("Simpson",  "Simpson Diversity Index")
+
+p_alpha_panel <- (p_observed | p_chao1) / (p_shannon | p_simpson) +
+  plot_annotation(
+    title    = "Alpha Diversity — Individual Metrics",
+    subtitle = subtitle_text,
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
+  )
+
+print(p_alpha_panel)
+
+# ==============================================================================
+# 7.5  Testes estatísticos — tabelas completas
+# ==============================================================================
+
+metrics_list <- c("Observed", "Chao1", "Shannon", "Simpson")
+grp_a        <- groups_ordered[1]
+grp_b        <- groups_ordered[2]
+
+# ── Kruskal-Wallis ──────────────────────────────────────────────────────────
+
+kw_results <- map_dfr(metrics_list, function(m) {
+  dat  <- alpha_div %>% filter(!is.na(.data[[m]]))
+  test <- kruskal.test(reformulate("treatment", response = m), data = dat)
+  tibble(
+    Metric    = m,
+    Test      = "Kruskal-Wallis",
+    Statistic = round(test$statistic, 4),
+    df        = test$parameter,
+    p_value   = round(test$p.value, 4),
+    Sig       = case_when(
+      test$p.value < 0.001 ~ "***",
+      test$p.value < 0.01  ~ "**",
+      test$p.value < 0.05  ~ "*",
+      TRUE                 ~ "ns"
+    )
+  )
+})
+
+# ── Wilcoxon rank-sum ───────────────────────────────────────────────────────
+# exact = FALSE  → dados de microbioma sempre têm empates (ties)
+
+wx_results <- map_dfr(metrics_list, function(m) {
+  dat    <- alpha_div %>% filter(!is.na(.data[[m]]))
+  vals_a <- dat %>% filter(treatment == grp_a) %>% pull(.data[[m]])
+  vals_b <- dat %>% filter(treatment == grp_b) %>% pull(.data[[m]])
+  test   <- wilcox.test(vals_a, vals_b, exact = FALSE)
+  tibble(
+    Metric     = m,
+    Test       = "Wilcoxon rank-sum",
+    Comparison = paste(grp_a, "vs", grp_b),
+    W          = round(test$statistic, 4),
+    p_value    = round(test$p.value, 4),
+    Sig        = case_when(
+      test$p.value < 0.001 ~ "***",
+      test$p.value < 0.01  ~ "**",
+      test$p.value < 0.05  ~ "*",
+      TRUE                 ~ "ns"
+    )
+  )
+})
+
+cat("\n══ Kruskal-Wallis (equivale ao Wilcoxon para 2 grupos) ══════════════\n")
+print(kw_results, n = Inf)
+
+cat("\n══ Wilcoxon Rank-Sum ═════════════════════════════════════════════════\n")
+print(wx_results, n = Inf)
+
+# ── Estatísticas descritivas ────────────────────────────────────────────────
+
+alpha_summary <- alpha_long %>%
+  group_by(treatment, Metric) %>%
+  summarise(
+    N      = n(),
+    Mean   = round(mean(Value,   na.rm = TRUE), 4),
+    Median = round(median(Value, na.rm = TRUE), 4),
+    SD     = round(sd(Value,     na.rm = TRUE), 4),
+    Min    = round(min(Value,    na.rm = TRUE), 4),
+    Max    = round(max(Value,    na.rm = TRUE), 4),
+    .groups = "drop"
+  )
+
+cat("\n══ Estatísticas Descritivas por Grupo ════════════════════════════════\n")
+print(alpha_summary, n = Inf)
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                     PARTE B — DIVERSIDADE BETA                           ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ==============================================================================
+# 8.1  Preparar matriz OTU a partir de ps_work
+# ==============================================================================
+
+otu_rare_mat <- as.data.frame(otu_table(ps_work))
+if (taxa_are_rows(ps_work)) otu_rare_mat <- t(otu_rare_mat)
+otu_rare_mat <- as.matrix(otu_rare_mat)
+rownames(otu_rare_mat) <- fix_id(rownames(otu_rare_mat))
+
+# Abundância relativa
+otu_rel_mat <- sweep(otu_rare_mat, 1, rowSums(otu_rare_mat), "/")
+
+# Alinhar metadata à ordem da matriz OTU
+meta_beta <- metadata_filtrado %>%
+  filter(sample_id %in% rownames(otu_rare_mat)) %>%
+  arrange(match(sample_id, rownames(otu_rare_mat)))
+
+stopifnot(all(rownames(otu_rare_mat) == meta_beta$sample_id))
+cat(sprintf("✔ Matriz OTU alinhada: %d amostras × %d features\n",
+            nrow(otu_rare_mat), ncol(otu_rare_mat)))
+
+# ==============================================================================
+# 8.2  Matrizes de distância
+# ==============================================================================
+
+# Bray-Curtis — baseada em abundância
+dist_bray <- vegdist(otu_rel_mat, method = "bray")
+
+# Jaccard — presença/ausência
+dist_jacc <- vegdist(otu_rare_mat, method = "jaccard", binary = TRUE)
+
+# Weighted UniFrac — requer árvore filogenética no phyloseq
+unifrac_available <- !is.null(
+  tryCatch(phy_tree(ps_work), error = function(e) NULL)
+)
+
+if (unifrac_available) {
+  dist_unifrac_w <- UniFrac(ps_work, weighted = TRUE, normalized = TRUE)
+  cat("✔ Weighted UniFrac computado\n")
+} else {
+  cat("⚠ Weighted UniFrac ignorado — sem árvore filogenética em ps_work\n")
+  cat("  Para habilitar: phy_tree(ps_work) <- read.tree('sua_arvore.nwk')\n")
+}
+
+dist_list <- list(
+  "Bray-Curtis" = dist_bray,
+  "Jaccard"     = dist_jacc
+)
+if (unifrac_available) dist_list[["Weighted UniFrac"]] <- dist_unifrac_w
+
+cat(sprintf("Distâncias prontas: %s\n",
+            paste(names(dist_list), collapse = ", ")))
+
+# ==============================================================================
+# 8.3  Pré-computar PERMANOVA + ANOSIM para TODAS as distâncias
+#      (necessário ANTES dos plots para anotar os gráficos)
+# ==============================================================================
+
+sig_stars <- function(p) {
+  case_when(
+    p < 0.001 ~ "***",
+    p < 0.01  ~ "**",
+    p < 0.05  ~ "*",
+    TRUE      ~ "ns"
+  )
+}
+
+stats_by_dist <- map(names(dist_list), function(dist_name) {
+  
+  # PERMANOVA
+  set.seed(42)
+  perm <- adonis2(
+    dist_list[[dist_name]] ~ treatment,
+    data         = meta_beta,
+    permutations = 999,
+    by           = "margin"
+  )
+  perm_R2 <- round(perm$R2[1],    3)
+  perm_p  <- perm$`Pr(>F)`[1]
+  perm_F  <- round(perm$F[1],     3)
+  
+  # ANOSIM
+  set.seed(42)
+  ano   <- anosim(dist_list[[dist_name]],
+                  grouping     = meta_beta$treatment,
+                  permutations = 999)
+  ano_R <- round(ano$statistic, 3)
+  ano_p <- ano$signif
+  
+  cat(sprintf(
+    "[%s] PERMANOVA: R²=%.3f, F=%.3f, p=%.4f%s | ANOSIM: R=%.3f, p=%.4f%s\n",
+    dist_name,
+    perm_R2, perm_F, perm_p, sig_stars(perm_p),
+    ano_R, ano_p, sig_stars(ano_p)
+  ))
+  
+  list(
+    permanova_R2  = perm_R2,
+    permanova_F   = perm_F,
+    permanova_p   = perm_p,
+    permanova_sig = sig_stars(perm_p),
+    anosim_R      = ano_R,
+    anosim_p      = ano_p,
+    anosim_sig    = sig_stars(ano_p),
+    annot_text    = sprintf(
+      "PERMANOVA: R\u00B2 = %.3f, p = %.4f %s\nANOSIM:    R = %.3f,   p = %.4f %s",
+      perm_R2, perm_p, sig_stars(perm_p),
+      ano_R,   ano_p,  sig_stars(ano_p)
+    )
+  )
+}) %>% setNames(names(dist_list))
+
+# ==============================================================================
+# 8.4  Helper — plot de ordenação com caixa de estatísticas
+# ==============================================================================
+
+plot_ord_stats <- function(scores_df, x_col, y_col,
+                           x_label, y_label,
+                           title, subtitle,
+                           stats_text = NULL) {
+  
+  p <- ggplot(scores_df,
+              aes(x     = .data[[x_col]],
+                  y     = .data[[y_col]],
+                  color = treatment,
+                  label = sample_id)) +
+    geom_point(size = 3.5, alpha = 0.85) +
+    geom_text_repel(
+      size          = 2.8,
+      max.overlaps  = 30,
+      show.legend   = FALSE,
+      segment.color = "grey60"
+    ) +
+    stat_ellipse(
+      aes(group = treatment),
+      type      = "norm",
+      linetype  = "dashed",
+      alpha     = 0.6,
+      linewidth = 0.7
+    ) +
+    scale_color_manual(values = group_colors) +
     labs(
-      title = "Diversidade Alfa por Tratamento (Idade 42 dias)",
-      subtitle = "Dados filtrados: control vs m2-102",
-      x = "Tratamento", 
-      y = "Índice de Diversidade",
-      color = "Tratamento"
+      title    = title,
+      subtitle = subtitle,
+      x        = x_label,
+      y        = y_label,
+      color    = "Treatment"
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      plot.title      = element_text(face = "bold"),
+      plot.subtitle   = element_text(color = "grey40", size = 10),
+      legend.position = "right"
     )
   
-  print(p_diversidade)
+  if (!is.null(stats_text)) {
+    p <- p +
+      annotate(
+        "label",
+        x          = Inf,
+        y          = -Inf,
+        label      = stats_text,
+        hjust      = 1.03,
+        vjust      = -0.15,
+        size       = 3.0,
+        color      = "black",
+        fill       = "white",
+        alpha      = 0.88,
+        label.size = 0.35,
+        family     = "mono",
+        fontface   = "plain"
+      )
+  }
   
-  # 10. Extrair dados de diversidade para análises estatísticas
-  alfa_df <- estimate_richness(physeq_tax_filtrado, measures = c("Shannon", "Simpson", "Chao1"))
-  alfa_stats <- merge(alfa_df, sample_data(physeq_tax_filtrado), by = "row.names") %>%
-    rename(sample_clean = Row.names)
+  p
+}
+
+# ==============================================================================
+# 8.5  PCoA — com anotações PERMANOVA + ANOSIM
+# ==============================================================================
+
+pcoa_plots <- list()
+
+for (dist_name in names(dist_list)) {
   
-  cat("✅ Objeto phyloseq criado e diversidade calculada com sucesso!\n")
-  cat("📊 Dados de diversidade disponíveis em: alfa_stats\n")
+  pcoa_res <- pcoa(dist_list[[dist_name]])
   
-}, error = function(e) {
-  cat("❌ Erro ao criar objeto phyloseq:\n")
-  cat(conditionMessage(e), "\n")
-  cat("\n🔍 Verificações sugeridas:\n")
-  cat("1. Confirme que tax_ready existe e tem dados\n")
-  cat("2. Verifique se as colunas 'sample_clean', 'feature', 'count' estão presentes\n")
-  cat("3. Confirme que há amostras com age=42 e treatment='control'/'m2-102'\n")
+  eig      <- pcoa_res$values$Eigenvalues
+  var_pcoa <- round(eig[eig > 0] / sum(eig[eig > 0]) * 100, 1)
+  
+  pcoa_df <- as.data.frame(pcoa_res$vectors[, 1:2]) %>%
+    setNames(c("Axis1", "Axis2")) %>%
+    rownames_to_column("sample_id") %>%
+    mutate(sample_id = fix_id(sample_id)) %>%
+    left_join(
+      metadata_filtrado %>% select(sample_id, treatment),
+      by = "sample_id"
+    )
+  
+  annot <- stats_by_dist[[dist_name]]$annot_text
+  
+  pcoa_subtitle <- if (!is.na(rare_depth)) {
+    sprintf("Rarefied to %s reads | Age %d d | 999 permutations",
+            format(rare_depth, big.mark = ","), target_age)
+  } else {
+    sprintf("Non-rarefied | Age %d d | 999 permutations", target_age)
+  }
+  
+  p <- plot_ord_stats(
+    scores_df  = pcoa_df,
+    x_col      = "Axis1",
+    y_col      = "Axis2",
+    x_label    = sprintf("PCoA Axis 1 (%.1f%%)", var_pcoa[1]),
+    y_label    = sprintf("PCoA Axis 2 (%.1f%%)", var_pcoa[2]),
+    title      = sprintf("PCoA — %s Distance", dist_name),
+    subtitle   = pcoa_subtitle,
+    stats_text = annot
+  )
+  
+  pcoa_plots[[dist_name]] <- p
+  print(p)
+}
+
+# Painel combinado PCoA
+n_cols_pcoa <- ifelse(length(pcoa_plots) == 3, 3, 2)
+
+p_pcoa_panel <- wrap_plots(pcoa_plots, ncol = n_cols_pcoa) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title    = "PCoA — Beta Diversity",
+    subtitle = sprintf("Age %d d · %s",
+                       target_age, paste(groups_ordered, collapse = " vs ")),
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(color = "grey40", size = 10)
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+print(p_pcoa_panel)
+
+# ==============================================================================
+# 8.6  NMDS — Non-metric Multidimensional Scaling
+# ==============================================================================
+
+nmds_plots  <- list()
+nmds_stress <- list()
+
+for (dist_name in names(dist_list)) {
+  
+  set.seed(42)
+  nmds_res <- metaMDS(
+    dist_list[[dist_name]],
+    k             = 2,
+    trymax        = 100,
+    trace         = FALSE,
+    autotransform = FALSE
+  )
+  
+  stress_val   <- nmds_res$stress
+  stress_label <- case_when(
+    stress_val < 0.10 ~ "excellent",
+    stress_val < 0.20 ~ "good",
+    stress_val < 0.30 ~ "acceptable",
+    TRUE              ~ "poor — interpret with caution"
+  )
+  
+  nmds_stress[[dist_name]] <- stress_val
+  cat(sprintf("\nNMDS [%s]: stress = %.4f (%s)\n",
+              dist_name, stress_val, stress_label))
+  
+  nmds_df <- as.data.frame(scores(nmds_res, display = "sites")) %>%
+    rownames_to_column("sample_id") %>%
+    mutate(sample_id = fix_id(sample_id)) %>%
+    left_join(
+      metadata_filtrado %>% select(sample_id, treatment),
+      by = "sample_id"
+    )
+  
+  p <- plot_ord_stats(
+    scores_df  = nmds_df,
+    x_col      = "NMDS1",
+    y_col      = "NMDS2",
+    x_label    = "NMDS1",
+    y_label    = "NMDS2",
+    title      = sprintf("NMDS — %s Distance", dist_name),
+    subtitle   = sprintf("Stress = %.4f (%s) | Age %d d",
+                         stress_val, stress_label, target_age),
+    stats_text = NULL
+  ) +
+    annotate("text",
+             x        = -Inf,
+             y        = Inf,
+             label    = sprintf("Stress: %.4f", stress_val),
+             hjust    = -0.1,
+             vjust    = 1.4,
+             size     = 3.5,
+             color    = "grey30",
+             fontface = "italic")
+  
+  nmds_plots[[dist_name]] <- p
+  print(p)
+}
+
+# Painel combinado NMDS
+p_nmds_panel <- wrap_plots(nmds_plots, ncol = n_cols_pcoa) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "NMDS — Beta Diversity",
+    theme = theme(plot.title = element_text(face = "bold", size = 15))
+  ) &
+  theme(legend.position = "bottom")
+
+print(p_nmds_panel)
+
+# ==============================================================================
+# 8.7  ComplexHeatmap — Top espécies mais variáveis
+# ==============================================================================
+
+n_top <- min(50, ncol(otu_rel_mat))   # Segurança se < 50 features
+
+top_species <- apply(otu_rel_mat, 2, var) %>%
+  sort(decreasing = TRUE) %>%
+  head(n_top) %>%
+  names()
+
+heat_mat   <- t(otu_rel_mat[, top_species])
+heat_mat_z <- t(scale(t(heat_mat)))
+heat_mat_z <- pmax(pmin(heat_mat_z, 3), -3)   # clamp Z-scores
+
+# Simplificar labels (remover kingdom prefix k__xxx|)
+rownames(heat_mat_z) <- sub("^[^|]*\\|", "", rownames(heat_mat_z))
+colnames(heat_mat_z) <- fix_id(colnames(heat_mat_z))
+
+hclust_cols <- hclust(dist_bray,        method = "ward.D2")
+hclust_rows <- hclust(dist(heat_mat_z), method = "ward.D2")
+
+col_fun <- colorRamp2(
+  c(-3, -1.5, 0, 1.5, 3),
+  c("#2166AC", "#92C5DE", "white", "#F4A582", "#D6604D")
+)
+
+col_anno <- HeatmapAnnotation(
+  Treatment = meta_beta$treatment,
+  col       = list(Treatment = group_colors),
+  annotation_name_gp      = gpar(fontsize = 11, fontface = "bold"),
+  annotation_legend_param = list(
+    Treatment = list(title_gp = gpar(fontface = "bold"))
+  )
+)
+
+ht <- Heatmap(
+  heat_mat_z,
+  name                 = "Z-score",
+  col                  = col_fun,
+  top_annotation       = col_anno,
+  cluster_rows         = hclust_rows,
+  cluster_columns      = hclust_cols,
+  show_column_names    = TRUE,
+  column_names_gp      = gpar(fontsize = 8),
+  show_row_names       = TRUE,
+  row_names_gp         = gpar(fontsize = 7.5),
+  row_names_side       = "left",
+  row_dend_side        = "right",
+  column_title         = sprintf(
+    "Beta Diversity Heatmap — Top %d Variable Species (Z-score, Bray-Curtis clustering)",
+    n_top
+  ),
+  column_title_gp      = gpar(fontsize = 12, fontface = "bold"),
+  heatmap_legend_param = list(
+    title    = "Z-score",
+    at       = c(-3, -1.5, 0, 1.5, 3),
+    title_gp = gpar(fontface = "bold")
+  ),
+  border = TRUE
+)
+
+draw(ht, merge_legend = TRUE)
+
+# ==============================================================================
+# 8.8  Homogeneidade de dispersão — betadisper (pressuposição do PERMANOVA)
+# ==============================================================================
+
+betadisp_results <- map_dfr(names(dist_list), function(dist_name) {
+  
+  beta_d <- betadisper(dist_list[[dist_name]], group = meta_beta$treatment)
+  set.seed(42)
+  perm_d <- permutest(beta_d, permutations = 999)
+  
+  tibble(
+    Distance = dist_name,
+    F_stat   = round(perm_d$tab[1, "F"],      4),
+    p_value  = round(perm_d$tab[1, "Pr(>F)"], 4),
+    Result   = case_when(
+      perm_d$tab[1, "Pr(>F)"] < 0.05 ~
+        "⚠ Dispersão desigual — PERMANOVA pode refletir spread, não location",
+      TRUE ~
+        "✔ Dispersão homogênea — PERMANOVA confiável"
+    )
+  )
 })
+
+# ==============================================================================
+# 8.9  Tabelas de resultados consolidadas
+# ==============================================================================
+
+permanova_results <- map_dfr(names(stats_by_dist), function(dist_name) {
+  s <- stats_by_dist[[dist_name]]
+  tibble(
+    Distance = dist_name,
+    R2       = s$permanova_R2,
+    F_stat   = s$permanova_F,
+    p_value  = s$permanova_p,
+    Sig      = s$permanova_sig
+  )
+})
+
+anosim_results <- map_dfr(names(stats_by_dist), function(dist_name) {
+  s <- stats_by_dist[[dist_name]]
+  tibble(
+    Distance = dist_name,
+    R_stat   = s$anosim_R,
+    p_value  = s$anosim_p,
+    Strength = case_when(
+      s$anosim_R > 0.75 ~ "strong",
+      s$anosim_R > 0.50 ~ "moderate",
+      s$anosim_R > 0.25 ~ "weak",
+      TRUE              ~ "negligible"
+    ),
+    Sig = s$anosim_sig
+  )
+})
+
+# ==============================================================================
+# 8.10  Sumário estatístico completo
+# ==============================================================================
+
+cat("\n")
+cat("╔══════════════════════════════════════════════════════════════════════╗\n")
+cat("║              SUMÁRIO ESTATÍSTICO — BETA DIVERSIDADE                ║\n")
+cat("╚══════════════════════════════════════════════════════════════════════╝\n")
+
+cat("\n══ PERMANOVA ═══════════════════════════════════════════════════════════\n")
+print(permanova_results, n = Inf)
+
+cat("\n══ ANOSIM ══════════════════════════════════════════════════════════════\n")
+print(anosim_results, n = Inf)
+
+cat("\n══ Betadisper (Homogeneidade de Dispersão) ═════════════════════════════\n")
+print(betadisp_results, n = Inf)
+
+cat("\n✅ Pipeline de diversidade alfa + beta concluído com sucesso!\n")
+cat("📊 Objetos principais disponíveis:\n")
+cat("   • alpha_div / alpha_long   — métricas de alfa diversidade\n")
+cat("   • alpha_summary            — estatísticas descritivas\n")
+cat("   • kw_results / wx_results  — testes KW e Wilcoxon\n")
+cat("   • dist_list                — matrizes de distância (beta)\n")
+cat("   • permanova_results        — PERMANOVA por distância\n")
+cat("   • anosim_results           — ANOSIM por distância\n")
+cat("   • betadisp_results         — teste de homogeneidade de dispersão\n")
+
+
+
+
+
+
