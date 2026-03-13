@@ -109,55 +109,205 @@ cat("ETL concluído. Dados padronizados em formato longo criados.\n\n")
 
 
 # ==============================================================================
-# 4. PREPARAÇÃO PARA DIVERSIDADE ALFA E BETA
+# FILTRAGEM E CRIAÇÃO DO OBJETO PHYLOSEQ (CORRIGIDO)
 # ==============================================================================
-# Para rodar diversidade, você precisa que os dados retornem ao formato de matriz (Largo).
-# Aqui está uma função utilitária para transformar qualquer um dos dataframes longos 
-# gerados acima em um objeto 'phyloseq' (ideal) ou 'matriz para vegan'.
 
-create_phyloseq_object <- function(df_long, meta_df) {
+cat("Aplicando filtros e criando objeto phyloseq...\n")
+
+# 1. Definir parâmetros de filtro
+target_age <- 42
+target_treatments <- c("control", "m2-102")
+
+# 2. Filtrar metadata (usando as colunas corretas)
+cat("Colunas disponíveis no metadata:", paste(colnames(metadata), collapse = ", "), "\n")
+
+metadata_filtrado <- metadata %>%
+  filter(
+    age == target_age,                      # ✅ Usar apenas 'age' (não 'age_group')
+    treatment %in% target_treatments
+  ) %>%
+  droplevels()  # Remove níveis não utilizados dos fatores
+
+# 3. Verificar amostras retidas
+cat("Amostras após filtro:", nrow(metadata_filtrado), "\n")
+cat("Tratamentos:", paste(unique(metadata_filtrado$treatment), collapse = ", "), "\n")
+
+# 4. Verificar se temos amostras suficientes
+if (nrow(metadata_filtrado) == 0) {
+  stop("❌ Nenhuma amostra passou pelos filtros! Verifique os valores de age e treatment.")
+}
+
+# 5. Filtrar dados taxonômicos 
+# Vamos usar tax_ready que foi criado no seu código original
+if (exists("tax_ready") && !is.null(tax_ready)) {
   
-  # 1. Transformar contagens de volta para formato largo (matriz de abundância)
-  otu_matrix <- df_long %>%
-    select(sample_id, feature, count) %>%
-    pivot_wider(names_from = sample_id, values_from = count, values_fill = 0) %>%
+  # Verificar colunas disponíveis em tax_ready
+  cat("Colunas em tax_ready:", paste(colnames(tax_ready), collapse = ", "), "\n")
+  
+  dados_tax_filtrado <- tax_ready %>%
+    filter(treatment %in% target_treatments)
+  
+  # Se tax_ready tem coluna age, filtrar também por idade
+  if ("age" %in% colnames(tax_ready)) {
+    dados_tax_filtrado <- dados_tax_filtrado %>%
+      filter(age == target_age)
+  }
+  
+} else {
+  stop("❌ Objeto 'tax_ready' não encontrado! Certifique-se de executar o código de processamento primeiro.")
+}
+
+cat("Features taxonômicas após filtro:", nrow(dados_tax_filtrado), "\n")
+
+# 6. Função para criar objeto phyloseq (corrigida)
+create_phyloseq_object <- function(tax_data, meta_data) {
+  
+  cat("Criando objeto phyloseq...\n")
+  
+  # Verificar colunas necessárias
+  required_cols_tax <- c("sample_clean", "feature", "count")
+  required_cols_meta <- c("sample_clean", "treatment")  # Mudei de sample_id para sample_clean
+  
+  if (!all(required_cols_tax %in% colnames(tax_data))) {
+    missing_tax <- setdiff(required_cols_tax, colnames(tax_data))
+    stop("Colunas faltando em tax_data: ", paste(missing_tax, collapse = ", "))
+  }
+  
+  # Se metadata tem sample_id ao invés de sample_clean, vamos renomear
+  if ("sample_id" %in% colnames(meta_data) && !"sample_clean" %in% colnames(meta_data)) {
+    meta_data <- meta_data %>% rename(sample_clean = sample_id)
+  }
+  
+  if (!all(required_cols_meta %in% colnames(meta_data))) {
+    missing_meta <- setdiff(required_cols_meta, colnames(meta_data))
+    stop("Colunas faltando em meta_data: ", paste(missing_meta, collapse = ", "))
+  }
+  
+  # Converter para matriz larga (amostras nas colunas, features nas linhas)
+  otu_wide <- tax_data %>%
+    select(sample_clean, feature, count) %>%
+    group_by(sample_clean, feature) %>%
+    summarise(count = sum(count, na.rm = TRUE), .groups = "drop") %>%  # Somar duplicatas
+    pivot_wider(names_from = sample_clean, values_from = count, values_fill = 0) %>%
     column_to_rownames("feature") %>%
     as.matrix()
   
-  # 2. Preparar metadados
-  meta_df_rownames <- meta_df %>% 
-    column_to_rownames("sample_id")
+  cat("Matriz OTU criada:", nrow(otu_wide), "features x", ncol(otu_wide), "amostras\n")
   
-  # 3. Montar objeto Phyloseq
-  OTU <- otu_table(otu_matrix, taxa_are_rows = TRUE)
-  SAMP <- sample_data(meta_df_rownames)
+  # Criar tabela de taxonomia se disponível
+  if ("feature" %in% colnames(tax_data) && any(grepl("\\|", tax_data$feature))) {
+    tax_table <- tax_data %>%
+      select(feature) %>%
+      distinct() %>%
+      separate(feature, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), 
+               sep = "\\|", fill = "right", remove = FALSE) %>%
+      column_to_rownames("feature") %>%
+      as.matrix()
+    cat("Tabela de taxonomia criada\n")
+  } else {
+    tax_table <- NULL
+    cat("Tabela de taxonomia não criada (sem informação hierárquica)\n")
+  }
   
-  physeq_obj <- phyloseq(OTU, SAMP)
-  return(physeq_obj)
+  # Preparar metadados
+  sample_info <- meta_data %>%
+    column_to_rownames("sample_clean") %>%
+    as.data.frame()
+  
+  # Verificar consistência entre amostras
+  common_samples <- intersect(colnames(otu_wide), rownames(sample_info))
+  cat("Amostras em comum:", length(common_samples), "\n")
+  
+  if (length(common_samples) == 0) {
+    cat("Amostras em otu_wide:", paste(head(colnames(otu_wide)), collapse = ", "), "...\n")
+    cat("Amostras em sample_info:", paste(head(rownames(sample_info)), collapse = ", "), "...\n")
+    stop("Nenhuma amostra em comum entre dados e metadados!")
+  }
+  
+  # Filtrar para amostras comuns
+  otu_wide <- otu_wide[, common_samples, drop = FALSE]
+  sample_info <- sample_info[common_samples, , drop = FALSE]
+  
+  # Remover features com soma zero
+  otu_wide <- otu_wide[rowSums(otu_wide) > 0, , drop = FALSE]
+  
+  cat("Matriz final:", nrow(otu_wide), "features x", ncol(otu_wide), "amostras\n")
+  
+  # Criar objeto phyloseq
+  if (!is.null(tax_table)) {
+    # Com taxonomia
+    common_features <- intersect(rownames(otu_wide), rownames(tax_table))
+    otu_wide <- otu_wide[common_features, , drop = FALSE]
+    tax_table <- tax_table[common_features, , drop = FALSE]
+    
+    physeq <- phyloseq(
+      otu_table(otu_wide, taxa_are_rows = TRUE),
+      tax_table(tax_table),
+      sample_data(sample_info)
+    )
+  } else {
+    # Sem taxonomia
+    physeq <- phyloseq(
+      otu_table(otu_wide, taxa_are_rows = TRUE),
+      sample_data(sample_info)
+    )
+  }
+  
+  return(physeq)
 }
 
-# Exemplo: Criar o objeto Phyloseq para a taxonomia e calcular diversidade
-physeq_tax <- create_phyloseq_object(dados_tax, metadata)
-
-# Cálculo de Alfa Diversidade (Shannon, Simpson) - O pacote tratará automaticamente o formato.
-# plot_richness(physeq_tax, x = "treatment", measures = c("Shannon", "Simpson")) + 
-#   geom_boxplot() + theme_minimal()
-
-cat("Objeto Phyloseq criado com sucesso. Você está pronto para análises estatísticas!\n")
-
-
-# Visualizar a Diversidade Alfa
-plot_richness(physeq_tax, 
-              x = "treatment", 
-              measures = c("Shannon", "Simpson", "Chao1"), 
-              color = "treatment") + 
-  geom_boxplot(alpha = 0.7) + 
-  geom_point(size = 2, alpha = 0.5) +
-  theme_minimal() +
-  labs(title = "Diversidade Alfa por Tratamento", y = "Índice de Diversidade")
-
-# Extrair os números exatos para fazer estatística (ex: Kruskal-Wallis ou ANOVA)
-alfa_df <- estimate_richness(physeq_tax, measures = c("Shannon", "Simpson", "Chao1"))
-# Juntar com seus metadados para análises estatísticas
-alfa_stats <- merge(alfa_df, sample_data(physeq_tax), by = "row.names")
-
+# 7. Criar objeto phyloseq
+tryCatch({
+  physeq_tax_filtrado <- create_phyloseq_object(dados_tax_filtrado, metadata_filtrado)
+  
+  # 8. Verificar o objeto criado
+  cat("\n=== RESUMO DO OBJETO PHYLOSEQ ===\n")
+  print(physeq_tax_filtrado)
+  
+  cat("\nAmostras:", nsamples(physeq_tax_filtrado))
+  cat("\nFeatures (OTUs/ASVs):", ntaxa(physeq_tax_filtrado))
+  cat("\nTratamentos:", paste(unique(sample_data(physeq_tax_filtrado)$treatment), collapse = ", "), "\n")
+  
+  # 9. Calcular diversidade alfa
+  cat("\nCalculando diversidade alfa...\n")
+  
+  # Plot de diversidade
+  p_diversidade <- plot_richness(physeq_tax_filtrado, 
+                                 x = "treatment", 
+                                 measures = c("Shannon", "Simpson", "Chao1"), 
+                                 color = "treatment") + 
+    geom_boxplot(alpha = 0.7, width = 0.5) + 
+    geom_point(size = 2.5, alpha = 0.8, position = position_jitter(width = 0.2)) +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      strip.text = element_text(face = "bold")
+    ) +
+    labs(
+      title = "Diversidade Alfa por Tratamento (Idade 42 dias)",
+      subtitle = "Dados filtrados: control vs m2-102",
+      x = "Tratamento", 
+      y = "Índice de Diversidade",
+      color = "Tratamento"
+    )
+  
+  print(p_diversidade)
+  
+  # 10. Extrair dados de diversidade para análises estatísticas
+  alfa_df <- estimate_richness(physeq_tax_filtrado, measures = c("Shannon", "Simpson", "Chao1"))
+  alfa_stats <- merge(alfa_df, sample_data(physeq_tax_filtrado), by = "row.names") %>%
+    rename(sample_clean = Row.names)
+  
+  cat("✅ Objeto phyloseq criado e diversidade calculada com sucesso!\n")
+  cat("📊 Dados de diversidade disponíveis em: alfa_stats\n")
+  
+}, error = function(e) {
+  cat("❌ Erro ao criar objeto phyloseq:\n")
+  cat(conditionMessage(e), "\n")
+  cat("\n🔍 Verificações sugeridas:\n")
+  cat("1. Confirme que tax_ready existe e tem dados\n")
+  cat("2. Verifique se as colunas 'sample_clean', 'feature', 'count' estão presentes\n")
+  cat("3. Confirme que há amostras com age=42 e treatment='control'/'m2-102'\n")
+})
