@@ -1166,6 +1166,12 @@ if (coef_threshold == 0) coef_threshold <- 0.5
 # ─────────────────────────────────────────────────────────────────────────────
 # 9.5  Volcano plot
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.5  Volcano plot
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Threshold de p-value nominal (além do q-value já existente)
+p_threshold <- 0.05
 
 p_volcano <- ggplot(
   maaslin_res,
@@ -1182,23 +1188,40 @@ p_volcano <- ggplot(
     box.padding   = 0.45,
     show.legend   = FALSE
   ) +
+  # ── Linha horizontal: q-value threshold (FDR) ──────────────────────────────
   geom_hline(
     yintercept = -log10(q_threshold),
     linetype   = "dashed",
     color      = "firebrick",
     linewidth  = 0.6
   ) +
+  # ── Linha horizontal: p-value nominal threshold ────────────────────────────
+  geom_hline(
+    yintercept = -log10(p_threshold),
+    linetype   = "dotted",
+    color      = "steelblue",
+    linewidth  = 0.6
+  ) +
+  # ── Linhas verticais: coef threshold ───────────────────────────────────────
   geom_vline(
     xintercept = c(-coef_threshold, coef_threshold),
     linetype   = "dashed",
     color      = "grey45",
     linewidth  = 0.5
   ) +
+  # ── Label: q-value ─────────────────────────────────────────────────────────
   annotate("text",
            x     = Inf, y = -log10(q_threshold),
            label = sprintf("q = %.2f", q_threshold),
            hjust = 1.05, vjust = -0.5,
            size = 3.2, color = "firebrick", fontface = "italic") +
+  # ── Label: p-value ─────────────────────────────────────────────────────────
+  annotate("text",
+           x     = Inf, y = -log10(p_threshold),
+           label = sprintf("p = %.2f", p_threshold),
+           hjust = 1.05, vjust = -0.5,
+           size = 3.2, color = "steelblue", fontface = "italic") +
+  # ── Contagens nos cantos ───────────────────────────────────────────────────
   annotate("text",
            x     = min(maaslin_res$coef, na.rm = TRUE),
            y     = max(maaslin_res$neg_log10_q, na.rm = TRUE),
