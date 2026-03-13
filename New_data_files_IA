@@ -10,6 +10,7 @@ suppressPackageStartupMessages({
   library(vegan)
 })
 
+setwd("C:/Users/dti-/Documents/ANH/Simphyome_Analysis/Hav1801")
 # ==============================================================================
 # 1. CARREGAMENTO E LIMPEZA DE METADADOS
 # ==============================================================================
