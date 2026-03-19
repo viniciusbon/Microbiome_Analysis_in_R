@@ -1,7 +1,7 @@
 ###############################################################################
 #                    USER CONFIG
 ###############################################################################
-
+rm(list = ls())
 data_dir           <- "C:/Users/dti-/Desktop/Padronizados e prontos para analise/HAV2112"
 sample_id_col_name <- "Sample_ID"
 group_col_name     <- "group"
@@ -1075,8 +1075,8 @@ for (ds in names(datasets_grouped_list)) {
   tl_all <- rbind(tl_q, tl_po)
   y_max  <- max(mr$neg_log10_p, na.rm = TRUE) * 1.05
   
-  pv <- ggplot(mr, aes(x = coef, y = neg_log10_p, color = Dir5, size = abs(coef))) +
-    geom_point(alpha = 0.7) +
+  pv <- ggplot(mr, aes(x = coef, y = neg_log10_p, color = Dir5)) +
+    geom_point(alpha = 0.7, size = 2) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed",
                color = "#D35400", linewidth = 0.6) +
     geom_hline(yintercept = -log10(q_threshold), linetype = "dotdash",
@@ -1084,7 +1084,6 @@ for (ds in names(datasets_grouped_list)) {
     geom_vline(xintercept = c(-coef_threshold, coef_threshold),
                linetype = "dashed", color = "grey50", linewidth = 0.5) +
     scale_color_manual(values = vc5, drop = FALSE) +
-    scale_size_continuous(range = c(1.2, 4.2), guide = "none") +
     annotate("text", x = max(mr$coef, na.rm = TRUE) * 0.98,
              y = -log10(0.05), label = "p = 0.05",
              hjust = 1, vjust = -0.5, size = 3.2, color = "#D35400", fontface = "bold") +
@@ -1441,3 +1440,4 @@ for (ds in names(datasets_grouped_list)) {
 cat(sprintf("  TOTAIS: %d plots | %d tabelas | %d erros\n",
             ec$plots, ec$tables, ec$errors))
 cat(rep("=", 70), "\n  PIPELINE COMPLETO!\n", rep("=", 70), "\n")
+rm(list = ls())
