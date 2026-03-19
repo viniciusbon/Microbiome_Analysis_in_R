@@ -5,9 +5,9 @@
 data_dir           <- "C:/Users/dti-/Desktop/Padronizados e prontos para analise/HAV2112"
 sample_id_col_name <- "Sample_ID"
 group_col_name     <- "group"
-selected_groups    <- c("control", "symph900")
+selected_groups    <- c("control", "symph1800")
 age_col_name       <- "age"
-selected_ages      <- NULL
+selected_ages      <- c(14)
 group_colors       <- c("#E31A1C", "#1F78B4")
 names(group_colors) <- selected_groups
 
@@ -51,6 +51,46 @@ for (col in c("sample","Sample","sample_id","SampleID","sample_ID","Sample_ID"))
   } else if (col %in% colnames(df_meta) && col==sample_id_col_name) break
 }
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FASE 1C — QC FILTER: AMR E VF (HIGH CONFIDENCE - SEM Q_Value)
+# ═══════════════════════════════════════════════════════════════════════════════
+cat("\n", rep("=",60), "\n=== FASE 1C: QC FILTER ===\n", rep("=",60), "\n\n")
+
+qc_filter <- function(dataset, dsn, filters) {
+  if (is.null(dataset)) return(NULL)
+  n0 <- nrow(dataset)
+  cat(sprintf("  %s: %d hits\n", dsn, n0))
+  for (f in filters) {
+    mc <- NULL
+    for (cn in names(dataset)) if (tolower(cn) %in% tolower(c(f$col, f$aliases))) { mc <- cn; break }
+    if (is.null(mc)) { cat(sprintf("    '%s' nao encontrada\n", f$col)); next }
+    v <- as.numeric(as.character(dataset[[mc]]))
+    k <- if (f$op == ">=") !is.na(v) & v >= f$val else !is.na(v) & v <= f$val
+    dataset <- dataset[k, ]
+    cat(sprintf("    %s %s %s: -%d -> %d\n", mc, f$op, f$val, sum(!k,na.rm=TRUE), nrow(dataset)))
+  }
+  cat(sprintf("  %s: %d -> %d (%.1f%%)\n\n", dsn, n0, nrow(dataset), nrow(dataset)/n0*100))
+  dataset
+}
+
+# AMR: Identity>=95, Coverage>=90, Depth>=10, readCount>=20
+cat("  AMR: Identity>=95 Coverage>=90 Depth>=10 readCount>=20\n\n")
+df_AMR <- qc_filter(df_AMR, "AMR", list(
+  list(col="Template_Identity", aliases=c("Template.Identity"), op=">=", val=95),
+  list(col="Template_Coverage", aliases=c("Template.Coverage"), op=">=", val=90),
+  list(col="Depth",             aliases=c("depth"),             op=">=", val=10),
+  list(col="readCount",         aliases=c("Read_Count","ReadCount"), op=">=", val=20)
+))
+
+# VF: Identity>=90, Coverage>=80, Depth>=10, readCount>=10
+cat("  VF: Identity>=90 Coverage>=80 Depth>=10 readCount>=10\n\n")
+df_VF <- qc_filter(df_VF, "VF", list(
+  list(col="Template_Identity", aliases=c("Template.Identity"), op=">=", val=90),
+  list(col="Template_Coverage", aliases=c("Template.Coverage"), op=">=", val=80),
+  list(col="Depth",             aliases=c("depth"),             op=">=", val=10),
+  list(col="readCount",         aliases=c("Read_Count","ReadCount"), op=">=", val=10)
+))
 # ═══════════════════════════════════════════════════════════════════════════════
 # FASE 2
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -210,10 +250,11 @@ print(variance_summary)
 # ═══════════════════════════════════════════════════════════════════════════════
 # FASE 8 — ALPHA DIVERSITY
 # ═══════════════════════════════════════════════════════════════════════════════
+
 cat("\n",rep("=",70),"\n=== FASE 8: ALPHA ===\n")
 datasets_grouped_list<-list(KO=df_ko_grouped,AMR=df_AMR_grouped,VF=df_VF_grouped,CAZy=df_CAZy_grouped,EC=df_EC_grouped,COGs=df_COGs_grouped,TAX=df_TAX_grouped)
 datasets_grouped_list<-datasets_grouped_list[!sapply(datasets_grouped_list,is.null)]
-output_root<-file.path(data_dir,"functional_diversity_results");dir.create(output_root,recursive=TRUE,showWarnings=FALSE)
+output_root<-file.path(data_dir,"functional_diversity_results_symph1800vscontrol_d14");dir.create(output_root,recursive=TRUE,showWarnings=FALSE)
 ng<-length(selected_groups)
 if(ng<=2)group_palette<-setNames(c("#E31A1C","#1F78B4")[1:ng],selected_groups)else group_palette<-setNames(brewer.pal(min(ng,9),"Set1")[1:ng],selected_groups)
 if(ng==2)comparisons_list<-list(selected_groups)else comparisons_list<-combn(selected_groups,2,simplify=FALSE)
