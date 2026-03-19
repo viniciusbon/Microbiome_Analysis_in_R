@@ -1,5 +1,5 @@
 ###############################################################################
-#                    CONFIGURAÇÃO DO USUÁRIO
+#                    USER CONFIG
 ###############################################################################
 
 data_dir           <- "C:/Users/dti-/Desktop/Padronizados e prontos para analise/HAV2112"
@@ -12,7 +12,7 @@ group_colors       <- c("#E31A1C", "#1F78B4")
 names(group_colors) <- selected_groups
 
 ###############################################################################
-#                    BIBLIOTECAS
+#                    LIBS
 ###############################################################################
 
 library(phyloseq); library(DESeq2); library(edgeR); library(compositions)
@@ -845,7 +845,7 @@ for (ds in names(datasets_grouped_list)) {
     if (is.null(nr2)) next
     sv <- nr2$stress
     nst[[dn]] <- sv
-    sl2 <- ifelse(sv < 0.1, "excelente", ifelse(sv < 0.2, "bom",
+    sl2 <- ifelse(sv < 0.1, "excellent", ifelse(sv < 0.2, "good",
                                                 ifelse(sv < 0.3, "aceitavel", "ruim")))
     
     ns2 <- as.data.frame(scores(nr2, display = "sites"))
@@ -1043,8 +1043,8 @@ for (ds in names(datasets_grouped_list)) {
   vc5 <- c(
     setNames(comp_col, paste("Enriched in", comparison_group, "(q)")),
     setNames(ref_col,  paste("Enriched in", ref_group, "(q)")),
-    #setNames(adjustcolor(comp_col, alpha.f = 0.45), paste("Enriched in", comparison_group, "(p only)")),
-    #setNames(adjustcolor(ref_col,  alpha.f = 0.45), paste("Enriched in", ref_group, "(p only)")),
+    setNames(adjustcolor(comp_col, alpha.f = 0.45), paste("Enriched in", comparison_group, "(p only)")),
+    setNames(adjustcolor(ref_col,  alpha.f = 0.45), paste("Enriched in", ref_group, "(p only)")),
     "Not significant" = "grey78"
   )
   
