@@ -377,7 +377,7 @@ cat("\n=== FASE 7: PCA ===\n")
 
 do_pca <- function(ds, dsn) {
   if (is.null(ds) || !group_col_name %in% names(ds)) return(NULL)
-  if (nrow(ds) < 3) { cat(sprintf("  %s: <3 amostras, pulando PCA\n", dsn)); return(NULL) }
+  if (nrow(ds) < 3) { cat(sprintf("  %s: <3 amostras, pulando\n", dsn)); return(NULL) }
   
   fc  <- setdiff(names(ds), meta_cols_internal)
   ms  <- ds[, intersect(meta_cols_internal, names(ds)), drop = FALSE]
@@ -397,38 +397,52 @@ do_pca <- function(ds, dsn) {
   pdf2$Sample_ID <- ms[[sample_id_col_name]]
   pdf2$Group     <- ms[[group_col_name]]
   
-  gn <- table(pdf2$Group)
-  groups_with_ellipse <- names(gn[gn >= 4])
-  ed <- pdf2[pdf2$Group %in% names(gn[gn >= 4]), ]
+  gn        <- table(pdf2$Group)
+  groups_ok <- names(gn[gn >= 4])
+  ed        <- pdf2[pdf2$Group %in% groups_ok, ]
   
-  p12 <- ggplot(pdf2, aes(PC1, PC2, color = Group, label = Sample_ID)) +
+  # PC1 vs PC2
+  p12 <- ggplot(pdf2, aes(x = PC1, y = PC2, color = Group, label = Sample_ID)) +
     geom_point(size = 3.5, alpha = 0.85) +
     geom_text_repel(size = 2.5, max.overlaps = 30, show.legend = FALSE) +
     scale_color_manual(values = group_colors) +
-    labs(title = paste("PCA -", dsn, "PC1 vs PC2"),
+    labs(title = paste("PCA -", dsn, "- PC1 vs PC2"),
          x = sprintf("PC1 (%.1f%%)", ve[1]),
          y = sprintf("PC2 (%.1f%%)", ve[2])) +
     theme_minimal(base_size = 13) +
     theme(plot.title = element_text(face = "bold"))
-  if (nrow(ed) >= 4) {
-    p12 <- p12 + stat_ellipse(data = ed, aes(group = Group),
-                              type = "norm", linetype = "dashed", alpha = 0.5)
+  
+  if (nrow(ed) >= 4 && length(groups_ok) > 0) {
+    p12 <- p12 + stat_ellipse(
+      data = ed,
+      aes(x = PC1, y = PC2, color = Group, group = Group),
+      type = "norm", level = 0.95,
+      linetype = "dashed", alpha = 0.5,
+      inherit.aes = FALSE
+    )
   }
   
+  # PC1 vs PC3
   p13 <- NULL
   if (np >= 3) {
-    p13 <- ggplot(pdf2, aes(PC1, PC3, color = Group, label = Sample_ID)) +
+    p13 <- ggplot(pdf2, aes(x = PC1, y = PC3, color = Group, label = Sample_ID)) +
       geom_point(size = 3.5, alpha = 0.85) +
       geom_text_repel(size = 2.5, max.overlaps = 30, show.legend = FALSE) +
       scale_color_manual(values = group_colors) +
-      labs(title = paste("PCA -", dsn, "PC1 vs PC3"),
+      labs(title = paste("PCA -", dsn, "- PC1 vs PC3"),
            x = sprintf("PC1 (%.1f%%)", ve[1]),
            y = sprintf("PC3 (%.1f%%)", ve[3])) +
       theme_minimal(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
-    if (nrow(ed) >= 4) {
-      p13 <- p13 + stat_ellipse(data = ed, aes(group = Group),
-                                type = "norm", linetype = "dashed", alpha = 0.5)
+    
+    if (nrow(ed) >= 4 && length(groups_ok) > 0) {
+      p13 <- p13 + stat_ellipse(
+        data = ed,
+        aes(x = PC1, y = PC3, color = Group, group = Group),
+        type = "norm", level = 0.95,
+        linetype = "dashed", alpha = 0.5,
+        inherit.aes = FALSE
+      )
     }
   }
   
@@ -480,7 +494,6 @@ datasets_grouped_list <- list(
   TAX = df_TAX_grouped
 )
 datasets_grouped_list <- datasets_grouped_list[!sapply(datasets_grouped_list, is.null)]
-# Remover datasets com 0 linhas
 datasets_grouped_list <- datasets_grouped_list[sapply(datasets_grouped_list, function(x) nrow(x) > 0)]
 
 age_label <- if (is.null(selected_ages)) "all_ages" else paste(selected_ages, collapse = "-")
@@ -520,7 +533,6 @@ for (ds in names(datasets_grouped_list)) {
   
   cm <- ecm(dat)
   gv <- egv(dat)
-  
   dtype <- detect_data_type(cm)
   data_type_info[[ds]] <- dtype
   cm[cm < 0] <- 0
@@ -663,7 +675,6 @@ for (ds in names(datasets_grouped_list)) {
   alpha_stats_all[[ds]] <- list(kruskal_wallis = kw, wilcoxon = wx, descriptive = de)
   alpha_plots_all[[ds]] <- list(depth = pd, facet = paf, panel = pap,
                                 observed = po, chao1 = pc, shannon = ps, simpson = pi2)
-  
   print(pd); print(paf); print(pap)
   cat(paste("  OK:", ds, "\n\n"))
 }
@@ -771,8 +782,11 @@ for (ds in names(datasets_grouped_list)) {
     })
   }))
   
-  eok <- all(table(mb$Group) >= 4)
+  # Grupos com >= 4 amostras para elipse
+  grp_counts <- table(mb$Group)
+  groups_ok  <- names(grp_counts[grp_counts >= 4])
   
+  # PCoA
   pp_list <- list()
   for (dn in names(dl2)) {
     pr2 <- pcoa(dl2[[dn]])
@@ -783,7 +797,7 @@ for (ds in names(datasets_grouped_list)) {
     pd3$Sample <- rownames(pd3)
     pd3$Group  <- mb$Group[match(pd3$Sample, mb$Sample)]
     
-    p <- ggplot(pd3, aes(A1, A2, color = Group, label = Sample)) +
+    p <- ggplot(pd3, aes(x = A1, y = A2, color = Group, label = Sample)) +
       geom_point(size = 3.5, alpha = 0.85) +
       geom_text_repel(size = 2.5, max.overlaps = 25, show.legend = FALSE) +
       scale_color_manual(values = group_palette) +
@@ -795,10 +809,20 @@ for (ds in names(datasets_grouped_list)) {
            y = sprintf("Axis2 (%.1f%%)", vp[2])) +
       theme_bw(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
-    if (eok) {
-      p <- p + stat_ellipse(aes(group = Group), type = "norm",
-                            linetype = "dashed", alpha = 0.6)
+    
+    if (length(groups_ok) > 0) {
+      pd3_ell <- pd3[pd3$Group %in% groups_ok, ]
+      if (nrow(pd3_ell) >= 4) {
+        p <- p + stat_ellipse(
+          data = pd3_ell,
+          aes(x = A1, y = A2, color = Group, group = Group),
+          type = "norm", level = 0.95,
+          linetype = "dashed", alpha = 0.6,
+          inherit.aes = FALSE
+        )
+      }
     }
+    
     pp_list[[dn]] <- p
     print(p)
   }
@@ -809,6 +833,7 @@ for (ds in names(datasets_grouped_list)) {
     theme(legend.position = "bottom")
   print(pcp)
   
+  # NMDS
   np_list <- list()
   nst     <- list()
   for (dn in names(dl2)) {
@@ -827,7 +852,7 @@ for (ds in names(datasets_grouped_list)) {
     ns2$Sample <- rownames(ns2)
     ns2$Group  <- mb$Group[match(ns2$Sample, mb$Sample)]
     
-    p <- ggplot(ns2, aes(NMDS1, NMDS2, color = Group, label = Sample)) +
+    p <- ggplot(ns2, aes(x = NMDS1, y = NMDS2, color = Group, label = Sample)) +
       geom_point(size = 3.5, alpha = 0.85) +
       geom_text_repel(size = 2.5, max.overlaps = 25, show.legend = FALSE) +
       scale_color_manual(values = group_palette) +
@@ -839,10 +864,20 @@ for (ds in names(datasets_grouped_list)) {
            x = "NMDS1", y = "NMDS2") +
       theme_bw(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
-    if (eok) {
-      p <- p + stat_ellipse(aes(group = Group), type = "norm",
-                            linetype = "dashed", alpha = 0.6)
+    
+    if (length(groups_ok) > 0) {
+      ns2_ell <- ns2[ns2$Group %in% groups_ok, ]
+      if (nrow(ns2_ell) >= 4) {
+        p <- p + stat_ellipse(
+          data = ns2_ell,
+          aes(x = NMDS1, y = NMDS2, color = Group, group = Group),
+          type = "norm", level = 0.95,
+          linetype = "dashed", alpha = 0.6,
+          inherit.aes = FALSE
+        )
+      }
     }
+    
     np_list[[dn]] <- p
     print(p)
   }
@@ -881,7 +916,6 @@ for (ds in names(datasets_grouped_list)) {
                  column_title = sprintf("%s - Top %d", ds, nth), border = TRUE)
   draw(ht2, merge_legend = TRUE)
   
-  # Stats tables
   pt2 <- do.call(rbind, lapply(names(sbd), function(dn) {
     s <- sbd[[dn]]
     data.frame(Dataset = ds, Distance = dn, R2 = s$permanova_R2,
@@ -919,10 +953,10 @@ all_nmds_str  <- do.call(rbind, lapply(beta_stats_all, function(x) x$nmds_stress
 
 cat("\n", rep("=", 70), "\n=== FASE 11: MAASLIN2 ===\n", rep("=", 70), "\n\n")
 
-q_threshold    <- 0.25
-coef_threshold <- 0.5
-n_top_bar      <- 20
-ref_group      <- selected_groups[1]
+q_threshold      <- 0.25
+coef_threshold   <- 0.5
+n_top_bar        <- 20
+ref_group        <- selected_groups[1]
 comparison_group <- selected_groups[2]
 
 da_results_all <- list()
@@ -988,18 +1022,17 @@ for (ds in names(datasets_grouped_list)) {
     ifelse(mr$pval < 0.05 & mr$coef < 0, paste("Enriched in", ref_group),
            "Not significant"))
   
-  n25    <- sum(mr$qval < 0.25, na.rm = TRUE)
-  n05q   <- sum(mr$qval < 0.05, na.rm = TRUE)
-  nec    <- sum(mr$qval < q_threshold & mr$coef > 0, na.rm = TRUE)
-  ner    <- sum(mr$qval < q_threshold & mr$coef < 0, na.rm = TRUE)
+  n25     <- sum(mr$qval < 0.25, na.rm = TRUE)
+  n05q    <- sum(mr$qval < 0.05, na.rm = TRUE)
+  nec     <- sum(mr$qval < q_threshold & mr$coef > 0, na.rm = TRUE)
+  ner     <- sum(mr$qval < q_threshold & mr$coef < 0, na.rm = TRUE)
   n_sig_p <- sum(mr$pval < 0.05, na.rm = TRUE)
-  nec_p  <- sum(mr$pval < 0.05 & mr$coef > 0, na.rm = TRUE)
-  ner_p  <- sum(mr$pval < 0.05 & mr$coef < 0, na.rm = TRUE)
+  nec_p   <- sum(mr$pval < 0.05 & mr$coef > 0, na.rm = TRUE)
+  ner_p   <- sum(mr$pval < 0.05 & mr$coef < 0, na.rm = TRUE)
   
   comp_col <- group_palette[comparison_group]
   ref_col  <- group_palette[ref_group]
   
-  # Direção combinada (5 níveis)
   mr$Dir5 <- ifelse(
     mr$qval < q_threshold & mr$coef > 0, paste("Enriched in", comparison_group, "(q)"),
     ifelse(mr$qval < q_threshold & mr$coef < 0, paste("Enriched in", ref_group, "(q)"),
@@ -1010,8 +1043,8 @@ for (ds in names(datasets_grouped_list)) {
   vc5 <- c(
     setNames(comp_col, paste("Enriched in", comparison_group, "(q)")),
     setNames(ref_col,  paste("Enriched in", ref_group, "(q)")),
-    setNames(adjustcolor(comp_col, alpha.f = 0.45), paste("Enriched in", comparison_group, "(p only)")),
-    setNames(adjustcolor(ref_col,  alpha.f = 0.45), paste("Enriched in", ref_group, "(p only)")),
+    #setNames(adjustcolor(comp_col, alpha.f = 0.45), paste("Enriched in", comparison_group, "(p only)")),
+    #setNames(adjustcolor(ref_col,  alpha.f = 0.45), paste("Enriched in", ref_group, "(p only)")),
     "Not significant" = "grey78"
   )
   
@@ -1024,7 +1057,6 @@ for (ds in names(datasets_grouped_list)) {
   ))
   mr <- mr[order(mr$Dir5), ]
   
-  # Labels
   sf_q  <- mr[mr$qval < q_threshold, ]
   tl_q  <- if (nrow(sf_q) > 0) {
     do.call(rbind, lapply(unique(as.character(sf_q$Dir5)), function(d) {
@@ -1043,7 +1075,6 @@ for (ds in names(datasets_grouped_list)) {
   tl_all <- rbind(tl_q, tl_po)
   y_max  <- max(mr$neg_log10_p, na.rm = TRUE) * 1.05
   
-  # Volcano plot
   pv <- ggplot(mr, aes(x = coef, y = neg_log10_p, color = Dir5, size = abs(coef))) +
     geom_point(alpha = 0.7) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed",
@@ -1089,7 +1120,6 @@ for (ds in names(datasets_grouped_list)) {
   }
   print(pv)
   
-  # Bar plot
   pb   <- NULL
   ppnl <- NULL
   tp <- head(mr[mr$qval < q_threshold & mr$coef > 0, ], n_top_bar / 2)
@@ -1122,7 +1152,6 @@ for (ds in names(datasets_grouped_list)) {
     print(ppnl)
   }
   
-  # Resultados
   dex <- data.frame(
     Dataset = ds, Feature = mr$feature_clean,
     Coefficient = round(mr$coef, 4), SE = round(mr$stderr, 4),
@@ -1205,10 +1234,12 @@ for (ds in names(datasets_grouped_list)) {
   if (!is.null(pca_results_grouped[[ds]])) {
     pr <- pca_results_grouped[[ds]]
     if (!is.null(pr$plot_pc12)) {
-      sx({ save_gg(pr$plot_pc12, file.path(dp, "pca_PC1_vs_PC2"), 9, 7); ec$plots <- ec$plots + 1 }, "pca12")
+      sx({ save_gg(pr$plot_pc12, file.path(dp, "pca_PC1_vs_PC2"), 9, 7)
+        ec$plots <- ec$plots + 1 }, "pca12")
     }
     if (!is.null(pr$plot_pc13)) {
-      sx({ save_gg(pr$plot_pc13, file.path(dp, "pca_PC1_vs_PC3"), 9, 7); ec$plots <- ec$plots + 1 }, "pca13")
+      sx({ save_gg(pr$plot_pc13, file.path(dp, "pca_PC1_vs_PC3"), 9, 7)
+        ec$plots <- ec$plots + 1 }, "pca13")
     }
   }
   
@@ -1226,7 +1257,8 @@ for (ds in names(datasets_grouped_list)) {
       list(p = ap$simpson,  n = "alpha_simpson",      w = 7,  h = 6)
     )) {
       if (!is.null(it$p)) {
-        sx({ save_gg(it$p, file.path(da, it$n), it$w, it$h); ec$plots <- ec$plots + 1 }, it$n)
+        sx({ save_gg(it$p, file.path(da, it$n), it$w, it$h)
+          ec$plots <- ec$plots + 1 }, it$n)
       }
     }
   }
@@ -1279,7 +1311,8 @@ for (ds in names(datasets_grouped_list)) {
       list(p = dap$panel,   n = "da_volcano_bar_panel",   w = 20, h = 10)
     )) {
       if (!is.null(it$p)) {
-        sx({ save_gg(it$p, file.path(dd, it$n), it$w, it$h); ec$plots <- ec$plots + 1 }, it$n)
+        sx({ save_gg(it$p, file.path(dd, it$n), it$w, it$h)
+          ec$plots <- ec$plots + 1 }, it$n)
       }
     }
   }
