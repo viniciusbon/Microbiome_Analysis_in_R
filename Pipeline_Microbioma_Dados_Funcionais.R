@@ -398,6 +398,7 @@ do_pca <- function(ds, dsn) {
   pdf2$Group     <- ms[[group_col_name]]
   
   gn <- table(pdf2$Group)
+  groups_with_ellipse <- names(gn[gn >= 4])
   ed <- pdf2[pdf2$Group %in% names(gn[gn >= 4]), ]
   
   p12 <- ggplot(pdf2, aes(PC1, PC2, color = Group, label = Sample_ID)) +
