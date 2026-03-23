@@ -1,7 +1,7 @@
 ###############################################################################
 #                    USER CONFIG
 ###############################################################################
-rm(list = ls())
+
 data_dir           <- "C:/Users/dti-/Desktop/Padronizados e prontos para analise/HAV2112"
 sample_id_col_name <- "Sample_ID"
 group_col_name     <- "group"
@@ -30,6 +30,26 @@ mutate    <- dplyr::mutate
 arrange   <- dplyr::arrange
 summarise <- dplyr::summarise
 
+# ─── TEMA PADRÃO COM MARGENS SEGURAS ────────────────────────────────────────
+theme_pipeline <- function(base_size = 13) {
+  theme_bw(base_size = base_size) %+replace%
+    theme(
+      plot.title         = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle      = element_text(color = "grey40",
+                                        size  = base_size * 0.75),
+      plot.margin        = margin(t = 12, r = 18, b = 12, l = 18, unit = "pt"),
+      legend.position    = "bottom",
+      legend.box.spacing = unit(4,  "pt"),
+      legend.margin      = margin(t = 4,  unit = "pt"),
+      axis.text.x        = element_text(angle = 30, hjust = 1),
+      axis.title.x       = element_text(margin = margin(t = 8)),
+      axis.title.y       = element_text(margin = margin(r = 8)),
+      strip.text         = element_text(face = "bold"),
+      strip.clip         = "off"
+    )
+}
+theme_set(theme_pipeline())
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # FASE 1 — IMPORTAÇÃO
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -49,9 +69,10 @@ patterns <- c(
 
 data_storage <- list()
 for (key in names(patterns)) {
-  ff <- list.files(data_dir, pattern = patterns[key], full.names = TRUE, ignore.case = TRUE)
+  ff <- list.files(data_dir, pattern = patterns[key],
+                   full.names = TRUE, ignore.case = TRUE)
   if (length(ff) == 0) { warning(paste("Not found:", key)); next }
-  if (length(ff) > 1) ff <- ff[1]
+  if (length(ff) > 1)  ff <- ff[1]
   data_storage[[key]] <- if (grepl("\\.xlsx$", ff, ignore.case = TRUE)) {
     read_excel(ff)
   } else {
@@ -69,7 +90,8 @@ df_COGs <- data_storage$COGs
 df_TAX  <- data_storage$TAX
 df_meta <- data_storage$meta
 
-for (col in c("sample", "Sample", "sample_id", "SampleID", "sample_ID", "Sample_ID")) {
+for (col in c("sample", "Sample", "sample_id", "SampleID",
+              "sample_ID", "Sample_ID")) {
   if (col %in% colnames(df_meta) && col != sample_id_col_name) {
     colnames(df_meta)[colnames(df_meta) == col] <- sample_id_col_name
     break
@@ -92,39 +114,45 @@ qc_filter <- function(dataset, dsn, filters) {
   for (f in filters) {
     mc <- NULL
     for (cn in names(dataset)) {
-      if (tolower(cn) %in% tolower(c(f$col, f$aliases))) {
-        mc <- cn
-        break
-      }
+      if (tolower(cn) %in% tolower(c(f$col, f$aliases))) { mc <- cn; break }
     }
     if (is.null(mc)) {
-      cat(sprintf("    '%s' nao encontrada\n", f$col))
-      next
+      cat(sprintf("    '%s' nao encontrada\n", f$col)); next
     }
     v <- as.numeric(as.character(dataset[[mc]]))
     k <- if (f$op == ">=") !is.na(v) & v >= f$val else !is.na(v) & v <= f$val
     dataset <- dataset[k, ]
-    cat(sprintf("    %s %s %s: -%d -> %d\n", mc, f$op, f$val, sum(!k, na.rm = TRUE), nrow(dataset)))
+    cat(sprintf("    %s %s %s: -%d -> %d\n",
+                mc, f$op, f$val, sum(!k, na.rm = TRUE), nrow(dataset)))
   }
   
-  cat(sprintf("  %s: %d -> %d (%.1f%%)\n\n", dsn, n0, nrow(dataset), nrow(dataset) / n0 * 100))
+  cat(sprintf("  %s: %d -> %d (%.1f%%)\n\n",
+              dsn, n0, nrow(dataset), nrow(dataset) / n0 * 100))
   return(dataset)
 }
 
 cat("  AMR: Identity>=90 Coverage>=90 Depth>=10 readCount>=20\n\n")
 df_AMR <- qc_filter(df_AMR, "AMR", list(
-  list(col = "Template_Identity", aliases = c("Template.Identity"), op = ">=", val = 0),
-  list(col = "Template_Coverage", aliases = c("Template.Coverage"), op = ">=", val = 0),
-  list(col = "Depth",             aliases = c("depth"),             op = ">=", val = 0),
-  list(col = "readCount",         aliases = c("Read_Count", "ReadCount"), op = ">=", val = 0)
+  list(col = "Template_Identity",
+       aliases = c("Template.Identity"), op = ">=", val = 0),
+  list(col = "Template_Coverage",
+       aliases = c("Template.Coverage"), op = ">=", val = 0),
+  list(col = "Depth",
+       aliases = c("depth"),             op = ">=", val = 0),
+  list(col = "readCount",
+       aliases = c("Read_Count","ReadCount"), op = ">=", val = 0)
 ))
 
 cat("  VF: Identity>=90 Coverage>=90 Depth>=10 readCount>=10\n\n")
 df_VF <- qc_filter(df_VF, "VF", list(
-  list(col = "Template_Identity", aliases = c("Template.Identity"), op = ">=", val = 0),
-  list(col = "Template_Coverage", aliases = c("Template.Coverage"), op = ">=", val = 0),
-  list(col = "Depth",             aliases = c("depth"),             op = ">=", val = 0),
-  list(col = "readCount",         aliases = c("Read_Count", "ReadCount"), op = ">=", val = 0)
+  list(col = "Template_Identity",
+       aliases = c("Template.Identity"), op = ">=", val = 0),
+  list(col = "Template_Coverage",
+       aliases = c("Template.Coverage"), op = ">=", val = 0),
+  list(col = "Depth",
+       aliases = c("depth"),             op = ">=", val = 0),
+  list(col = "readCount",
+       aliases = c("Read_Count","ReadCount"), op = ">=", val = 0)
 ))
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -160,8 +188,9 @@ cat("\n=== FASE 2A: TAX ===\n")
 tax_taxonomy_table <- NULL
 if (!is.null(df_TAX)) {
   tcf <- intersect(names(df_TAX),
-                   c("k", "p", "c", "o", "f", "g", "s",
-                     "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"))
+                   c("k","p","c","o","f","g","s",
+                     "Kingdom","Phylum","Class","Order",
+                     "Family","Genus","Species"))
   if (length(tcf) > 0) {
     tax_taxonomy_table <- df_TAX[, tcf, drop = FALSE]
     if ("g" %in% tcf && "s" %in% tcf) {
@@ -197,30 +226,37 @@ pivot_lw <- function(dataset, dsn, id_col) {
     return(dataset)
   }
   
-  pm  <- c(id_col, "group", "age", "treatment", "study", "tissue", "age_group", "sample")
+  pm  <- c(id_col, "group", "age", "treatment", "study",
+           "tissue", "age_group", "sample")
   nm2 <- setdiff(names(dataset), pm)
   fc  <- NULL
   for (cl in nm2) {
-    if (is.character(dataset[[cl]]) || is.factor(dataset[[cl]])) { fc <- cl; break }
+    if (is.character(dataset[[cl]]) || is.factor(dataset[[cl]])) {
+      fc <- cl; break
+    }
   }
   if (is.null(fc)) fc <- nm2[1]
   
   nc2 <- nm2[sapply(dataset[, nm2, drop = FALSE], is.numeric)]
   vc  <- NULL
-  for (cd in c("Depth", "depth", "Hits", "hits", "Count", "count", "Score", "score")) {
+  for (cd in c("Depth","depth","Hits","hits","Count","count","Score","score")) {
     if (cd %in% nc2) { vc <- cd; break }
   }
   
   if (is.null(vc)) {
     pd <- dataset[, c(id_col, fc), drop = FALSE]
     pd$cv <- 1
-    ag <- aggregate(as.formula(paste("cv ~", id_col, "+", fc)), data = pd, FUN = sum)
-    wd <- reshape(ag, idvar = id_col, timevar = fc, direction = "wide", v.names = "cv")
+    ag <- aggregate(as.formula(paste("cv ~", id_col, "+", fc)),
+                    data = pd, FUN = sum)
+    wd <- reshape(ag, idvar = id_col, timevar = fc,
+                  direction = "wide", v.names = "cv")
     names(wd) <- gsub("^cv\\.", "", names(wd))
   } else {
     pd <- dataset[, c(id_col, fc, vc), drop = FALSE]
-    ag <- aggregate(as.formula(paste(vc, "~", id_col, "+", fc)), data = pd, FUN = sum)
-    wd <- reshape(ag, idvar = id_col, timevar = fc, direction = "wide", v.names = vc)
+    ag <- aggregate(as.formula(paste(vc, "~", id_col, "+", fc)),
+                    data = pd, FUN = sum)
+    wd <- reshape(ag, idvar = id_col, timevar = fc,
+                  direction = "wide", v.names = vc)
     pf <- paste0(vc, ".")
     names(wd) <- gsub(paste0("^", gsub("([.])", "\\\\\\1", pf)), "", names(wd))
   }
@@ -333,6 +369,7 @@ df_CAZy_grouped <- dg$df_CAZy_grouped
 df_EC_grouped   <- dg$df_EC_grouped
 df_COGs_grouped <- dg$df_COGs_grouped
 df_TAX_grouped  <- dg$df_TAX_grouped
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # FUNÇÕES AUXILIARES
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -341,7 +378,8 @@ meta_cols_internal <- c(sample_id_col_name, group_col_name, age_col_name)
 
 ecm <- function(ds) {
   fc <- setdiff(names(ds), meta_cols_internal)
-  m  <- as.data.frame(lapply(ds[, fc], function(x) as.numeric(as.character(x))))
+  m  <- as.data.frame(lapply(ds[, fc],
+                             function(x) as.numeric(as.character(x))))
   m[is.na(m)] <- 0
   rownames(m) <- ds[[sample_id_col_name]]
   as.matrix(m)
@@ -354,19 +392,106 @@ egv <- function(ds) {
 }
 
 ss <- function(p) {
-  ifelse(p < 0.001, "***", ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", "ns")))
-}
-
-save_gg <- function(po, fp, w = 10, h = 7, d = 300) {
-  ggsave(paste0(fp, ".png"), plot = po, width = w, height = h, dpi = d, bg = "white")
-  cat(paste("    Salvo:", basename(fp), ".png\n"))
+  ifelse(p < 0.001, "***",
+         ifelse(p < 0.01, "**",
+                ifelse(p < 0.05, "*", "ns")))
 }
 
 detect_data_type <- function(mat) {
   vals <- mat[mat != 0]
   if (length(vals) == 0) return(list(type = "empty", is_raw = FALSE))
   pct <- sum(vals == round(vals)) / length(vals) * 100
-  list(type = ifelse(pct > 95, "raw_counts", "pre_normalized"), is_raw = pct > 95)
+  list(type = ifelse(pct > 95, "raw_counts", "pre_normalized"),
+       is_raw = pct > 95)
+}
+
+# ─── CALCULADORA DE DIMENSÕES PARA HEATMAPS ─────────────────────────────────
+calc_heatmap_dims <- function(mat,
+                              base_cell_w = 0.28,
+                              base_cell_h = 0.22,
+                              legend_w    = 2.5,
+                              min_w = 12, max_w = 42,
+                              min_h = 8,  max_h = 52) {
+  nr <- nrow(mat)
+  nc <- ncol(mat)
+  
+  max_row_chars <- if (!is.null(rownames(mat))) max(nchar(rownames(mat))) else 20
+  max_col_chars <- if (!is.null(colnames(mat))) max(nchar(colnames(mat))) else 15
+  
+  # Largura: colunas + espaço para row names + legenda
+  row_name_w <- max_row_chars * 0.062
+  w <- nc * base_cell_w + row_name_w + legend_w
+  
+  # Altura: linhas + espaço para col names rotacionados + anotação topo
+  col_name_h <- max_col_chars * 0.045
+  h <- nr * base_cell_h + col_name_h + 1.5
+  
+  list(
+    width        = min(max(w, min_w), max_w),
+    height       = min(max(h, min_h), max_h),
+    row_fontsize = max(4, min(9,  140 / nr)),
+    col_fontsize = max(4, min(8,  120 / nc))
+  )
+}
+
+# ─── SAVE_GG COM DIMENSÕES DINÂMICAS E LIMITSIZE = FALSE ────────────────────
+save_gg <- function(po, fp, w = NULL, h = NULL, d = 300,
+                    extra_w = 0, extra_h = 0) {
+  
+  final_w <- if (!is.null(w)) w else 10
+  final_h <- if (!is.null(h)) h else 7
+  
+  # Tenta inferir padding necessário a partir do conteúdo
+  tryCatch({
+    built <- ggplot_build(po)
+    
+    # Detecta número de facets
+    lay <- built$layout$layout
+    n_row_facets <- if (!is.null(lay$ROW)) max(lay$ROW) else 1
+    n_col_facets <- if (!is.null(lay$COL)) max(lay$COL) else 1
+    
+    # Estima comprimento máximo de labels nos dados
+    all_labels <- c()
+    for (i in seq_along(built$data)) {
+      dd <- built$data[[i]]
+      chr_cols <- sapply(dd, is.character)
+      if (any(chr_cols)) {
+        all_labels <- c(all_labels,
+                        unlist(lapply(dd[chr_cols], function(x)
+                          as.character(x[!is.na(x)]))))
+      }
+    }
+    max_label_chars <- if (length(all_labels) > 0) max(nchar(all_labels)) else 0
+    
+    # Dimensão automática quando não fornecida
+    if (is.null(w)) {
+      base_w   <- max(8, n_col_facets * 3.5)
+      label_w  <- max_label_chars * 0.055
+      final_w  <- base_w + label_w
+    }
+    if (is.null(h)) {
+      base_h   <- max(6, n_row_facets * 3.5)
+      xlabel_h <- max_label_chars * 0.038
+      final_h  <- base_h + xlabel_h
+    }
+  }, error = function(e) {
+    # mantém os fallbacks já definidos
+  })
+  
+  final_w <- max(final_w + extra_w, 4)
+  final_h <- max(final_h + extra_h, 3)
+  
+  ggsave(
+    filename  = paste0(fp, ".png"),
+    plot      = po,
+    width     = final_w,
+    height    = final_h,
+    dpi       = d,
+    bg        = "white",
+    limitsize = FALSE
+  )
+  cat(sprintf("    Salvo: %s.png  [%.1f x %.1f in | %d dpi]\n",
+              basename(fp), final_w, final_h, d))
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -377,15 +502,18 @@ cat("\n=== FASE 7: PCA ===\n")
 
 do_pca <- function(ds, dsn) {
   if (is.null(ds) || !group_col_name %in% names(ds)) return(NULL)
-  if (nrow(ds) < 3) { cat(sprintf("  %s: <3 amostras, pulando\n", dsn)); return(NULL) }
+  if (nrow(ds) < 3) {
+    cat(sprintf("  %s: <3 amostras, pulando\n", dsn)); return(NULL)
+  }
   
   fc  <- setdiff(names(ds), meta_cols_internal)
   ms  <- ds[, intersect(meta_cols_internal, names(ds)), drop = FALSE]
-  fd  <- as.data.frame(lapply(ds[, fc, drop = FALSE], function(x) as.numeric(as.character(x))))
+  fd  <- as.data.frame(lapply(ds[, fc, drop = FALSE],
+                              function(x) as.numeric(as.character(x))))
   fd[is.na(fd)] <- 0
-  vv <- apply(fd, 2, var, na.rm = TRUE)
-  vf <- !is.na(vv) & vv > 0
-  fd <- fd[, vf, drop = FALSE]
+  vv  <- apply(fd, 2, var, na.rm = TRUE)
+  vf  <- !is.na(vv) & vv > 0
+  fd  <- fd[, vf, drop = FALSE]
   if (ncol(fd) < 3) return(NULL)
   
   clr <- compositions::clr(fd + 1e-6)
@@ -409,14 +537,14 @@ do_pca <- function(ds, dsn) {
     labs(title = paste("PCA -", dsn, "- PC1 vs PC2"),
          x = sprintf("PC1 (%.1f%%)", ve[1]),
          y = sprintf("PC2 (%.1f%%)", ve[2])) +
-    theme_minimal(base_size = 13) +
+    theme_pipeline(base_size = 13) +
     theme(plot.title = element_text(face = "bold"))
   
   if (nrow(ed) >= 4 && length(groups_ok) > 0) {
     p12 <- p12 + stat_ellipse(
-      data = ed,
+      data     = ed,
       aes(x = PC1, y = PC2, color = Group, group = Group),
-      type = "norm", level = 0.95,
+      type     = "norm", level = 0.95,
       linetype = "dashed", alpha = 0.5,
       inherit.aes = FALSE
     )
@@ -425,29 +553,34 @@ do_pca <- function(ds, dsn) {
   # PC1 vs PC3
   p13 <- NULL
   if (np >= 3) {
-    p13 <- ggplot(pdf2, aes(x = PC1, y = PC3, color = Group, label = Sample_ID)) +
+    p13 <- ggplot(pdf2,
+                  aes(x = PC1, y = PC3, color = Group, label = Sample_ID)) +
       geom_point(size = 3.5, alpha = 0.85) +
       geom_text_repel(size = 2.5, max.overlaps = 30, show.legend = FALSE) +
       scale_color_manual(values = group_colors) +
       labs(title = paste("PCA -", dsn, "- PC1 vs PC3"),
            x = sprintf("PC1 (%.1f%%)", ve[1]),
            y = sprintf("PC3 (%.1f%%)", ve[3])) +
-      theme_minimal(base_size = 13) +
+      theme_pipeline(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
     
     if (nrow(ed) >= 4 && length(groups_ok) > 0) {
       p13 <- p13 + stat_ellipse(
-        data = ed,
+        data     = ed,
         aes(x = PC1, y = PC3, color = Group, group = Group),
-        type = "norm", level = 0.95,
+        type     = "norm", level = 0.95,
         linetype = "dashed", alpha = 0.5,
         inherit.aes = FALSE
       )
     }
   }
   
-  list(pca_result = pr, pca_data = pdf2, variance_explained = ve,
-       plot_pc12 = p12, plot_pc13 = p13, dataset_name = dsn,
+  list(pca_result         = pr,
+       pca_data           = pdf2,
+       variance_explained = ve,
+       plot_pc12          = p12,
+       plot_pc13          = p13,
+       dataset_name       = dsn,
        group_distribution = table(pdf2$Group))
 }
 
@@ -462,23 +595,27 @@ for (dn in names(dpca)) {
   pca_results_grouped[[dn]] <- do_pca(dpca[[dn]], dn)
 }
 for (dn in names(pca_results_grouped)) {
-  if (!is.null(pca_results_grouped[[dn]])) print(pca_results_grouped[[dn]]$plot_pc12)
+  if (!is.null(pca_results_grouped[[dn]]))
+    print(pca_results_grouped[[dn]]$plot_pc12)
 }
 
 variance_summary <- do.call(rbind, lapply(names(pca_results_grouped), function(nm) {
-  r <- pca_results_grouped[[nm]]
+  r  <- pca_results_grouped[[nm]]
   if (is.null(r)) return(NULL)
   ve <- r$variance_explained; np <- length(ve)
-  data.frame(Dataset = nm, PC1 = round(ve[1], 1),
-             PC2 = if (np >= 2) round(ve[2], 1) else NA,
-             PC3 = if (np >= 3) round(ve[3], 1) else NA,
-             Total = round(sum(ve), 1), stringsAsFactors = FALSE)
+  data.frame(Dataset = nm,
+             PC1     = round(ve[1], 1),
+             PC2     = if (np >= 2) round(ve[2], 1) else NA,
+             PC3     = if (np >= 3) round(ve[3], 1) else NA,
+             Total   = round(sum(ve), 1),
+             stringsAsFactors = FALSE)
 }))
 for (g in selected_groups) {
-  variance_summary[[paste0(g, "_n")]] <- sapply(variance_summary$Dataset, function(d) {
-    gd <- pca_results_grouped[[d]]$group_distribution
-    if (g %in% names(gd)) as.integer(gd[g]) else 0L
-  })
+  variance_summary[[paste0(g, "_n")]] <- sapply(
+    variance_summary$Dataset, function(d) {
+      gd <- pca_results_grouped[[d]]$group_distribution
+      if (g %in% names(gd)) as.integer(gd[g]) else 0L
+    })
 }
 print(variance_summary)
 
@@ -489,14 +626,19 @@ print(variance_summary)
 cat("\n", rep("=", 70), "\n=== FASE 8: ALPHA ===\n")
 
 datasets_grouped_list <- list(
-  KO = df_ko_grouped, AMR = df_AMR_grouped, VF = df_VF_grouped,
-  CAZy = df_CAZy_grouped, EC = df_EC_grouped, COGs = df_COGs_grouped,
-  TAX = df_TAX_grouped
+  KO   = df_ko_grouped,   AMR  = df_AMR_grouped,
+  VF   = df_VF_grouped,   CAZy = df_CAZy_grouped,
+  EC   = df_EC_grouped,   COGs = df_COGs_grouped,
+  TAX  = df_TAX_grouped
 )
-datasets_grouped_list <- datasets_grouped_list[!sapply(datasets_grouped_list, is.null)]
-datasets_grouped_list <- datasets_grouped_list[sapply(datasets_grouped_list, function(x) nrow(x) > 0)]
+datasets_grouped_list <-
+  datasets_grouped_list[!sapply(datasets_grouped_list, is.null)]
+datasets_grouped_list <-
+  datasets_grouped_list[sapply(datasets_grouped_list,
+                               function(x) nrow(x) > 0)]
 
-age_label <- if (is.null(selected_ages)) "all_ages" else paste(selected_ages, collapse = "-")
+age_label <- if (is.null(selected_ages)) "all_ages" else
+  paste(selected_ages, collapse = "-")
 output_root <- file.path(data_dir, paste0(
   "results_", selected_groups[1], "_vs_", selected_groups[2],
   "_", age_col_name, "_", age_label
@@ -524,42 +666,46 @@ data_type_info       <- list()
 
 for (ds in names(datasets_grouped_list)) {
   cat(rep("-", 60), "\n", paste("ALPHA:", ds), "\n")
-  dat <- datasets_grouped_list[[ds]]
+  dat   <- datasets_grouped_list[[ds]]
   
   if (is.null(dat) || nrow(dat) < 2) {
-    cat(sprintf("  %s: <2 amostras, pulando\n\n", ds))
-    next
+    cat(sprintf("  %s: <2 amostras, pulando\n\n", ds)); next
   }
   
-  cm <- ecm(dat)
-  gv <- egv(dat)
+  cm    <- ecm(dat)
+  gv    <- egv(dat)
   dtype <- detect_data_type(cm)
   data_type_info[[ds]] <- dtype
   cm[cm < 0] <- 0
-  cm <- cm[, colSums(cm) > 0, drop = FALSE]
-  sd2 <- rowSums(cm)
-  rd  <- min(sd2)
+  cm    <- cm[, colSums(cm) > 0, drop = FALSE]
+  sd2   <- rowSums(cm)
+  rd    <- min(sd2)
   
   rarefaction_info_all[[ds]] <- data.frame(
-    Dataset = ds, Type = dtype$type, Min = round(rd),
-    Max = round(max(sd2)), Med = round(median(sd2)),
-    Samples = nrow(cm), Features = ncol(cm), stringsAsFactors = FALSE
+    Dataset  = ds,  Type     = dtype$type,
+    Min      = round(rd),     Max  = round(max(sd2)),
+    Med      = round(median(sd2)),
+    Samples  = nrow(cm),      Features = ncol(cm),
+    stringsAsFactors = FALSE
   )
   
   ddf <- data.frame(
     Sample = names(sd2), Depth = as.numeric(sd2),
-    Group = gv[names(sd2)], stringsAsFactors = FALSE
+    Group  = gv[names(sd2)], stringsAsFactors = FALSE
   )
-  rl <- ifelse(dtype$is_raw, sprintf("Rarefied to %d", round(rd)), "Pre-normalized")
+  rl <- ifelse(dtype$is_raw,
+               sprintf("Rarefied to %d", round(rd)),
+               "Pre-normalized")
   
   pd <- ggplot(ddf, aes(reorder(Sample, Depth), Depth, fill = Group)) +
     geom_col(alpha = 0.85) +
     scale_fill_manual(values = group_palette) +
     labs(title = paste(ds, "Depth"), x = "Sample", y = "Counts") +
-    theme_minimal() +
+    theme_pipeline() +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
   if (dtype$is_raw) {
-    pd <- pd + geom_hline(yintercept = rd, color = "darkred", linetype = "dashed")
+    pd <- pd +
+      geom_hline(yintercept = rd, color = "darkred", linetype = "dashed")
   }
   
   if (dtype$is_raw) {
@@ -575,74 +721,88 @@ for (ds in names(datasets_grouped_list)) {
     cr <- cm
   }
   
-  or <- rowSums(cr > 0)
-  ch <- tryCatch({
+  or  <- rowSums(cr > 0)
+  ch  <- tryCatch({
     if (dtype$is_raw) t(vegan::estimateR(round(cr)))[, "S.chao1"] else or
   }, error = function(e) or)
-  sh <- vegan::diversity(cr, "shannon")
-  si <- vegan::diversity(cr, "simpson")
+  sh  <- vegan::diversity(cr, "shannon")
+  si  <- vegan::diversity(cr, "simpson")
   
   adf <- data.frame(
-    Sample = rownames(cr), Group = gv[rownames(cr)],
-    Observed = as.numeric(or), Chao1 = as.numeric(ch),
-    Shannon = as.numeric(sh), Simpson = as.numeric(si),
+    Sample   = rownames(cr), Group    = gv[rownames(cr)],
+    Observed = as.numeric(or), Chao1  = as.numeric(ch),
+    Shannon  = as.numeric(sh), Simpson = as.numeric(si),
     stringsAsFactors = FALSE
   )
   alpha_results_all[[ds]] <- adf
   
-  al <- tidyr::pivot_longer(adf, c("Observed", "Chao1", "Shannon", "Simpson"),
-                            names_to = "Metric", values_to = "Value")
-  al$Metric <- factor(al$Metric, levels = c("Observed", "Chao1", "Shannon", "Simpson"))
+  al <- tidyr::pivot_longer(adf,
+                            c("Observed","Chao1","Shannon","Simpson"),
+                            names_to  = "Metric",
+                            values_to = "Value")
+  al$Metric <- factor(al$Metric,
+                      levels = c("Observed","Chao1","Shannon","Simpson"))
   
   paf <- ggplot(al, aes(Group, Value, fill = Group, color = Group)) +
     geom_violin(alpha = 0.35, trim = FALSE) +
-    geom_boxplot(width = 0.18, alpha = 0.8, outlier.shape = NA, color = "black") +
-    geom_jitter(width = 0.08, size = 1.8, alpha = 0.7, show.legend = FALSE) +
-    stat_compare_means(method = "wilcox.test", comparisons = comparisons_list,
-                       label = "p.format", tip.length = 0.01, size = 3.5) +
-    scale_fill_manual(values = group_palette) +
+    geom_boxplot(width = 0.18, alpha = 0.8,
+                 outlier.shape = NA, color = "black") +
+    geom_jitter(width = 0.08, size = 1.8, alpha = 0.7,
+                show.legend = FALSE) +
+    stat_compare_means(method = "wilcox.test",
+                       comparisons = comparisons_list,
+                       label = "p.format", tip.length = 0.01,
+                       size = 3.5) +
+    scale_fill_manual(values  = group_palette) +
     scale_color_manual(values = group_palette) +
     facet_wrap(~ Metric, scales = "free_y", nrow = 2) +
-    labs(title = paste("Alpha -", ds), subtitle = paste(rl, "| Wilcoxon"),
+    labs(title    = paste("Alpha -", ds),
+         subtitle = paste(rl, "| Wilcoxon"),
          x = NULL, y = "Value") +
-    theme_bw(base_size = 13) +
-    theme(plot.title = element_text(face = "bold"),
-          strip.text = element_text(face = "bold"),
-          legend.position = "bottom",
-          axis.text.x = element_text(angle = 20, hjust = 1))
+    theme_pipeline(base_size = 13) +
+    theme(legend.position = "bottom",
+          axis.text.x     = element_text(angle = 20, hjust = 1))
   
   pam <- function(m, yl) {
     d2 <- al[al$Metric == m, ]
     ggplot(d2, aes(Group, Value, fill = Group, color = Group)) +
       geom_violin(alpha = 0.3, trim = FALSE) +
-      geom_boxplot(width = 0.2, alpha = 0.8, outlier.shape = NA, color = "black") +
-      geom_jitter(width = 0.08, size = 2.2, alpha = 0.75, show.legend = FALSE) +
-      stat_compare_means(method = "wilcox.test", comparisons = comparisons_list,
+      geom_boxplot(width = 0.2, alpha = 0.8,
+                   outlier.shape = NA, color = "black") +
+      geom_jitter(width = 0.08, size = 2.2, alpha = 0.75,
+                  show.legend = FALSE) +
+      stat_compare_means(method = "wilcox.test",
+                         comparisons = comparisons_list,
                          label = "p.format", size = 3.8) +
-      scale_fill_manual(values = group_palette) +
+      scale_fill_manual(values  = group_palette) +
       scale_color_manual(values = group_palette) +
       labs(title = m, x = NULL, y = yl) +
-      theme_bw(base_size = 13) +
-      theme(plot.title = element_text(face = "bold", hjust = 0.5),
-            legend.position = "none")
+      theme_pipeline(base_size = 13) +
+      theme(plot.title       = element_text(face = "bold", hjust = 0.5),
+            legend.position  = "none")
   }
   
   po  <- pam("Observed", "Richness")
-  pc  <- pam("Chao1", "Chao1")
-  ps  <- pam("Shannon", "Shannon")
-  pi2 <- pam("Simpson", "Simpson")
-  pap <- (po | pc) / (ps | pi2) + plot_annotation(title = paste("Alpha -", ds), subtitle = rl)
+  pc  <- pam("Chao1",    "Chao1")
+  ps  <- pam("Shannon",  "Shannon")
+  pi2 <- pam("Simpson",  "Simpson")
+  pap <- (po | pc) / (ps | pi2) +
+    plot_annotation(title = paste("Alpha -", ds), subtitle = rl)
   
-  ml <- c("Observed", "Chao1", "Shannon", "Simpson")
+  ml <- c("Observed","Chao1","Shannon","Simpson")
   
   kw <- do.call(rbind, lapply(ml, function(m) {
     tryCatch({
       t2 <- kruskal.test(adf[[m]] ~ factor(adf$Group))
-      data.frame(Dataset = ds, Metric = m, Statistic = round(t2$statistic, 4),
-                 p_value = round(t2$p.value, 4), Sig = ss(t2$p.value), stringsAsFactors = FALSE)
+      data.frame(Dataset   = ds, Metric    = m,
+                 Statistic = round(t2$statistic, 4),
+                 p_value   = round(t2$p.value,   4),
+                 Sig       = ss(t2$p.value),
+                 stringsAsFactors = FALSE)
     }, error = function(e) {
-      data.frame(Dataset = ds, Metric = m, Statistic = NA,
-                 p_value = NA, Sig = "NA", stringsAsFactors = FALSE)
+      data.frame(Dataset = ds, Metric = m,
+                 Statistic = NA, p_value = NA, Sig = "NA",
+                 stringsAsFactors = FALSE)
     })
   }))
   
@@ -652,12 +812,17 @@ for (ds in names(datasets_grouped_list)) {
         va <- adf[adf$Group == pr[1], m]
         vb <- adf[adf$Group == pr[2], m]
         t2 <- wilcox.test(va, vb, exact = FALSE)
-        data.frame(Dataset = ds, Metric = m, Comparison = paste(pr, collapse = " vs "),
-                   W = round(t2$statistic, 4), p_value = round(t2$p.value, 4),
-                   Sig = ss(t2$p.value), stringsAsFactors = FALSE)
+        data.frame(Dataset    = ds, Metric = m,
+                   Comparison = paste(pr, collapse = " vs "),
+                   W          = round(t2$statistic, 4),
+                   p_value    = round(t2$p.value,   4),
+                   Sig        = ss(t2$p.value),
+                   stringsAsFactors = FALSE)
       }, error = function(e) {
-        data.frame(Dataset = ds, Metric = m, Comparison = paste(pr, collapse = " vs "),
-                   W = NA, p_value = NA, Sig = "NA", stringsAsFactors = FALSE)
+        data.frame(Dataset = ds, Metric = m,
+                   Comparison = paste(pr, collapse = " vs "),
+                   W = NA, p_value = NA, Sig = "NA",
+                   stringsAsFactors = FALSE)
       })
     }))
   }))
@@ -665,16 +830,24 @@ for (ds in names(datasets_grouped_list)) {
   de <- do.call(rbind, lapply(ml, function(m) {
     do.call(rbind, lapply(selected_groups, function(g) {
       v <- adf[adf$Group == g, m]
-      data.frame(Dataset = ds, Group = g, Metric = m, N = length(v),
-                 Mean = round(mean(v), 4), Median = round(median(v), 4),
-                 SD = round(sd(v), 4), Min = round(min(v), 4),
-                 Max = round(max(v), 4), stringsAsFactors = FALSE)
+      data.frame(Dataset = ds, Group = g, Metric = m,
+                 N      = length(v),
+                 Mean   = round(mean(v),   4),
+                 Median = round(median(v), 4),
+                 SD     = round(sd(v),     4),
+                 Min    = round(min(v),    4),
+                 Max    = round(max(v),    4),
+                 stringsAsFactors = FALSE)
     }))
   }))
   
-  alpha_stats_all[[ds]] <- list(kruskal_wallis = kw, wilcoxon = wx, descriptive = de)
-  alpha_plots_all[[ds]] <- list(depth = pd, facet = paf, panel = pap,
-                                observed = po, chao1 = pc, shannon = ps, simpson = pi2)
+  alpha_stats_all[[ds]] <- list(kruskal_wallis = kw,
+                                wilcoxon       = wx,
+                                descriptive    = de)
+  alpha_plots_all[[ds]] <- list(depth    = pd, facet    = paf,
+                                panel    = pap,
+                                observed = po, chao1    = pc,
+                                shannon  = ps, simpson  = pi2)
   print(pd); print(paf); print(pap)
   cat(paste("  OK:", ds, "\n\n"))
 }
@@ -697,16 +870,15 @@ for (ds in names(datasets_grouped_list)) {
   dat <- datasets_grouped_list[[ds]]
   
   if (is.null(dat) || nrow(dat) < 3) {
-    cat(sprintf("  %s: <3 amostras, pulando\n\n", ds))
-    next
+    cat(sprintf("  %s: <3 amostras, pulando\n\n", ds)); next
   }
   
   dtype <- data_type_info[[ds]]
-  cm <- ecm(dat)
-  gv <- egv(dat)
+  cm    <- ecm(dat)
+  gv    <- egv(dat)
   cm[cm < 0] <- 0
-  cm <- cm[, colSums(cm) > 0, drop = FALSE]
-  rd <- min(rowSums(cm))
+  cm    <- cm[, colSums(cm) > 0, drop = FALSE]
+  rd    <- min(rowSums(cm))
   
   if (dtype$is_raw) {
     ci <- round(cm)
@@ -723,28 +895,37 @@ for (ds in names(datasets_grouped_list)) {
   
   rm2 <- sweep(cr, 1, rowSums(cr), "/")
   rm2[is.nan(rm2)] <- 0
-  mb <- data.frame(Sample = rownames(cr), Group = gv[rownames(cr)], stringsAsFactors = FALSE)
-  bl <- ifelse(dtype$is_raw, sprintf("Rarefied %d", round(rd)), "Pre-normalized")
+  mb  <- data.frame(Sample = rownames(cr),
+                    Group  = gv[rownames(cr)],
+                    stringsAsFactors = FALSE)
+  bl  <- ifelse(dtype$is_raw,
+                sprintf("Rarefied %d", round(rd)),
+                "Pre-normalized")
   
   db  <- vegdist(rm2, "bray")
-  dj2 <- vegdist(if (dtype$is_raw) round(cr) else cr, "jaccard", binary = TRUE)
+  dj2 <- vegdist(if (dtype$is_raw) round(cr) else cr,
+                 "jaccard", binary = TRUE)
   dl2 <- list("Bray-Curtis" = db, "Jaccard" = dj2)
   
   sbd <- list()
   for (dn in names(dl2)) {
     set.seed(42)
     pm <- tryCatch(
-      adonis2(dl2[[dn]] ~ Group, data = mb, permutations = 999, by = "margin"),
+      adonis2(dl2[[dn]] ~ Group, data = mb,
+              permutations = 999, by = "margin"),
       error = function(e) NULL
     )
     if (is.null(pm)) {
-      sbd[[dn]] <- list(permanova_R2 = NA, permanova_F = NA, permanova_p = NA,
-                        permanova_sig = "NA", anosim_R = NA, anosim_p = NA,
-                        anosim_sig = "NA", annot_text = "Stats failed")
+      sbd[[dn]] <- list(
+        permanova_R2 = NA, permanova_F = NA,
+        permanova_p  = NA, permanova_sig = "NA",
+        anosim_R     = NA, anosim_p = NA,
+        anosim_sig   = "NA", annot_text = "Stats failed"
+      )
       next
     }
-    pR2 <- round(pm$R2[1], 3)
-    pF2 <- round(pm$F[1], 3)
+    pR2 <- round(pm$R2[1],      3)
+    pF2 <- round(pm$F[1],       3)
     pp  <- pm$`Pr(>F)`[1]
     
     set.seed(42)
@@ -755,16 +936,20 @@ for (ds in names(datasets_grouped_list)) {
     aR <- if (!is.null(an)) round(an$statistic, 3) else NA
     ap <- if (!is.null(an)) an$signif else NA
     
-    at2 <- sprintf("PERMANOVA: R2=%.3f p=%.4f %s\nANOSIM: R=%.3f p=%.4f %s",
-                   pR2, pp, ss(pp),
-                   ifelse(!is.na(aR), aR, 0),
-                   ifelse(!is.na(ap), ap, 1),
-                   ifelse(!is.na(ap), ss(ap), "NA"))
+    at2 <- sprintf(
+      "PERMANOVA: R2=%.3f p=%.4f %s\nANOSIM: R=%.3f p=%.4f %s",
+      pR2, pp, ss(pp),
+      ifelse(!is.na(aR), aR, 0),
+      ifelse(!is.na(ap), ap, 1),
+      ifelse(!is.na(ap), ss(ap), "NA")
+    )
     
     sbd[[dn]] <- list(
-      permanova_R2 = pR2, permanova_F = pF2, permanova_p = pp, permanova_sig = ss(pp),
-      anosim_R = aR, anosim_p = ap, anosim_sig = ifelse(!is.na(ap), ss(ap), "NA"),
-      annot_text = at2
+      permanova_R2  = pR2, permanova_F   = pF2,
+      permanova_p   = pp,  permanova_sig = ss(pp),
+      anosim_R      = aR,  anosim_p      = ap,
+      anosim_sig    = ifelse(!is.na(ap), ss(ap), "NA"),
+      annot_text    = at2
     )
   }
   
@@ -773,16 +958,17 @@ for (ds in names(datasets_grouped_list)) {
       bd  <- betadisper(dl2[[dn]], mb$Group)
       set.seed(42)
       pd2 <- permutest(bd, permutations = 999)
-      data.frame(Dataset = ds, Distance = dn,
-                 F_stat = round(pd2$tab[1, "F"], 4),
-                 p_value = round(pd2$tab[1, "Pr(>F)"], 4),
+      data.frame(Dataset  = ds, Distance = dn,
+                 F_stat   = round(pd2$tab[1, "F"],       4),
+                 p_value  = round(pd2$tab[1, "Pr(>F)"],  4),
                  stringsAsFactors = FALSE)
     }, error = function(e) {
-      data.frame(Dataset = ds, Distance = dn, F_stat = NA, p_value = NA, stringsAsFactors = FALSE)
+      data.frame(Dataset = ds, Distance = dn,
+                 F_stat = NA, p_value = NA,
+                 stringsAsFactors = FALSE)
     })
   }))
   
-  # Grupos com >= 4 amostras para elipse
   grp_counts <- table(mb$Group)
   groups_ok  <- names(grp_counts[grp_counts >= 4])
   
@@ -797,26 +983,32 @@ for (ds in names(datasets_grouped_list)) {
     pd3$Sample <- rownames(pd3)
     pd3$Group  <- mb$Group[match(pd3$Sample, mb$Sample)]
     
-    p <- ggplot(pd3, aes(x = A1, y = A2, color = Group, label = Sample)) +
+    p <- ggplot(pd3, aes(x = A1, y = A2,
+                         color = Group, label = Sample)) +
       geom_point(size = 3.5, alpha = 0.85) +
-      geom_text_repel(size = 2.5, max.overlaps = 25, show.legend = FALSE) +
+      geom_text_repel(size = 2.5, max.overlaps = 25,
+                      show.legend = FALSE) +
       scale_color_manual(values = group_palette) +
-      annotate("label", x = Inf, y = -Inf, label = sbd[[dn]]$annot_text,
-               hjust = 1.03, vjust = -0.15, size = 2.8, fill = "white",
-               alpha = 0.88, family = "mono") +
-      labs(title = sprintf("PCoA - %s - %s", ds, dn), subtitle = bl,
+      annotate("label",
+               x = Inf, y = -Inf,
+               label = sbd[[dn]]$annot_text,
+               hjust = 1.03, vjust = -0.15,
+               size = 2.8, fill = "white", alpha = 0.88,
+               family = "mono") +
+      labs(title    = sprintf("PCoA - %s - %s", ds, dn),
+           subtitle = bl,
            x = sprintf("Axis1 (%.1f%%)", vp[1]),
            y = sprintf("Axis2 (%.1f%%)", vp[2])) +
-      theme_bw(base_size = 13) +
+      theme_pipeline(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
     
     if (length(groups_ok) > 0) {
       pd3_ell <- pd3[pd3$Group %in% groups_ok, ]
       if (nrow(pd3_ell) >= 4) {
         p <- p + stat_ellipse(
-          data = pd3_ell,
+          data     = pd3_ell,
           aes(x = A1, y = A2, color = Group, group = Group),
-          type = "norm", level = 0.95,
+          type     = "norm", level = 0.95,
           linetype = "dashed", alpha = 0.6,
           inherit.aes = FALSE
         )
@@ -839,39 +1031,44 @@ for (ds in names(datasets_grouped_list)) {
   for (dn in names(dl2)) {
     set.seed(42)
     nr2 <- tryCatch(
-      metaMDS(dl2[[dn]], k = 2, trymax = 100, trace = FALSE, autotransform = FALSE),
+      metaMDS(dl2[[dn]], k = 2, trymax = 100,
+              trace = FALSE, autotransform = FALSE),
       error = function(e) NULL
     )
     if (is.null(nr2)) next
-    sv <- nr2$stress
+    sv  <- nr2$stress
     nst[[dn]] <- sv
-    sl2 <- ifelse(sv < 0.1, "excellent", ifelse(sv < 0.2, "good",
-                                                ifelse(sv < 0.3, "aceitavel", "ruim")))
+    sl2 <- ifelse(sv < 0.1, "excellent",
+                  ifelse(sv < 0.2, "good",
+                         ifelse(sv < 0.3, "aceitavel", "ruim")))
     
     ns2 <- as.data.frame(scores(nr2, display = "sites"))
     ns2$Sample <- rownames(ns2)
     ns2$Group  <- mb$Group[match(ns2$Sample, mb$Sample)]
     
-    p <- ggplot(ns2, aes(x = NMDS1, y = NMDS2, color = Group, label = Sample)) +
+    p <- ggplot(ns2, aes(x = NMDS1, y = NMDS2,
+                         color = Group, label = Sample)) +
       geom_point(size = 3.5, alpha = 0.85) +
-      geom_text_repel(size = 2.5, max.overlaps = 25, show.legend = FALSE) +
+      geom_text_repel(size = 2.5, max.overlaps = 25,
+                      show.legend = FALSE) +
       scale_color_manual(values = group_palette) +
-      annotate("text", x = -Inf, y = Inf,
-               label = sprintf("Stress: %.4f (%s)", sv, sl2),
-               hjust = -0.1, vjust = 1.4, size = 3.5,
-               color = "grey30", fontface = "italic") +
+      annotate("text",
+               x = -Inf, y = Inf,
+               label  = sprintf("Stress: %.4f (%s)", sv, sl2),
+               hjust  = -0.1, vjust = 1.4, size = 3.5,
+               color  = "grey30", fontface = "italic") +
       labs(title = sprintf("NMDS - %s - %s", ds, dn),
            x = "NMDS1", y = "NMDS2") +
-      theme_bw(base_size = 13) +
+      theme_pipeline(base_size = 13) +
       theme(plot.title = element_text(face = "bold"))
     
     if (length(groups_ok) > 0) {
       ns2_ell <- ns2[ns2$Group %in% groups_ok, ]
       if (nrow(ns2_ell) >= 4) {
         p <- p + stat_ellipse(
-          data = ns2_ell,
+          data     = ns2_ell,
           aes(x = NMDS1, y = NMDS2, color = Group, group = Group),
-          type = "norm", level = 0.95,
+          type     = "norm", level = 0.95,
           linetype = "dashed", alpha = 0.6,
           inherit.aes = FALSE
         )
@@ -891,7 +1088,7 @@ for (ds in names(datasets_grouped_list)) {
     print(pnp)
   }
   
-  # Heatmap
+  # ── Heatmap com parâmetros dinâmicos ──────────────────────────────────────
   nth <- min(50, ncol(rm2))
   fv2 <- apply(rm2, 2, var)
   tf2 <- names(sort(fv2, decreasing = TRUE))[1:nth]
@@ -904,41 +1101,74 @@ for (ds in names(datasets_grouped_list)) {
                   error = function(e) hclust(dist(t(hz)), "ward.D2"))
   hcr <- hclust(dist(hz), "ward.D2")
   cf2 <- colorRamp2(c(-3, -1.5, 0, 1.5, 3),
-                    c("#2166AC", "#92C5DE", "white", "#F4A582", "#D6604D"))
-  ca2 <- HeatmapAnnotation(Group = mb$Group, col = list(Group = group_palette))
-  rfs <- ifelse(nth > 40, 5.5, ifelse(nth > 25, 7, 8.5))
+                    c("#2166AC","#92C5DE","white","#F4A582","#D6604D"))
+  ca2 <- HeatmapAnnotation(
+    Group = mb$Group,
+    col   = list(Group = group_palette)
+  )
   
-  ht2 <- Heatmap(hz, name = "Z", col = cf2, top_annotation = ca2,
-                 cluster_rows = hcr, cluster_columns = hcc,
-                 show_column_names = TRUE, column_names_gp = gpar(fontsize = 7),
-                 show_row_names = TRUE, row_names_gp = gpar(fontsize = rfs),
-                 row_names_side = "left",
-                 column_title = sprintf("%s - Top %d", ds, nth), border = TRUE)
-  draw(ht2, merge_legend = TRUE)
+  # Dimensões e fontes calculadas dinamicamente
+  ht_dims <- calc_heatmap_dims(hz)
+  rfs     <- ht_dims$row_fontsize
+  cfs     <- ht_dims$col_fontsize
+  
+  ht2 <- Heatmap(
+    hz,
+    name           = "Z",
+    col            = cf2,
+    top_annotation = ca2,
+    cluster_rows   = hcr,
+    cluster_columns = hcc,
+    
+    # Configuração das colunas
+    show_column_names       = TRUE,
+    column_names_gp         = gpar(fontsize = cfs),
+    column_names_rot        = 45,
+    column_names_max_height = unit(6, "cm"),
+    
+    # Configuração das linhas
+    show_row_names      = TRUE,
+    row_names_gp        = gpar(fontsize = rfs),
+    row_names_side      = "left",
+    row_names_max_width = max_text_width(
+      rownames(hz),
+      gp = gpar(fontsize = rfs)
+    ),
+    
+    column_title = sprintf("%s - Top %d", ds, nth),
+    border       = TRUE
+  )
+  draw(ht2, merge_legend = TRUE,
+       padding = unit(c(8, 8, 8, 8), "mm"))
   
   pt2 <- do.call(rbind, lapply(names(sbd), function(dn) {
     s <- sbd[[dn]]
-    data.frame(Dataset = ds, Distance = dn, R2 = s$permanova_R2,
-               F_stat = s$permanova_F, p_value = s$permanova_p,
-               Sig = s$permanova_sig, stringsAsFactors = FALSE)
+    data.frame(Dataset  = ds, Distance  = dn,
+               R2       = s$permanova_R2, F_stat = s$permanova_F,
+               p_value  = s$permanova_p,  Sig    = s$permanova_sig,
+               stringsAsFactors = FALSE)
   }))
   at3 <- do.call(rbind, lapply(names(sbd), function(dn) {
     s <- sbd[[dn]]
-    data.frame(Dataset = ds, Distance = dn, R_stat = s$anosim_R,
-               p_value = s$anosim_p, Sig = s$anosim_sig, stringsAsFactors = FALSE)
+    data.frame(Dataset = ds, Distance = dn,
+               R_stat  = s$anosim_R, p_value = s$anosim_p,
+               Sig     = s$anosim_sig, stringsAsFactors = FALSE)
   }))
   nt2 <- if (length(nst) > 0) {
-    data.frame(Dataset = ds, Distance = names(nst),
-               Stress = round(unlist(nst), 4), stringsAsFactors = FALSE)
+    data.frame(Dataset  = ds, Distance = names(nst),
+               Stress   = round(unlist(nst), 4),
+               stringsAsFactors = FALSE)
   } else {
     data.frame(Dataset = character(), Distance = character(),
-               Stress = numeric(), stringsAsFactors = FALSE)
+               Stress  = numeric(), stringsAsFactors = FALSE)
   }
   
-  beta_stats_all[[ds]] <- list(permanova = pt2, anosim = at3,
-                               betadisper = bdr, nmds_stress = nt2)
-  beta_plots_all[[ds]] <- list(pcoa_plots = pp_list, pcoa_panel = pcp,
-                               nmds_plots = np_list, nmds_panel = pnp, heatmap = ht2)
+  beta_stats_all[[ds]] <- list(permanova   = pt2, anosim     = at3,
+                               betadisper  = bdr, nmds_stress = nt2)
+  beta_plots_all[[ds]] <- list(pcoa_plots  = pp_list, pcoa_panel = pcp,
+                               nmds_plots  = np_list, nmds_panel = pnp,
+                               heatmap     = ht2,
+                               heatmap_mat = hz)   # ← matriz guardada
   cat(paste("  OK:", ds, "\n\n"))
 }
 
@@ -948,10 +1178,11 @@ all_betadisp  <- do.call(rbind, lapply(beta_stats_all, function(x) x$betadisper)
 all_nmds_str  <- do.call(rbind, lapply(beta_stats_all, function(x) x$nmds_stress))
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FASE 11 — MAASLIN2 + VOLCANO (q + p)
+# FASE 11 — MAASLIN2 + VOLCANO
 # ═══════════════════════════════════════════════════════════════════════════════
 
-cat("\n", rep("=", 70), "\n=== FASE 11: MAASLIN2 ===\n", rep("=", 70), "\n\n")
+cat("\n", rep("=", 70), "\n=== FASE 11: MAASLIN2 ===\n",
+    rep("=", 70), "\n\n")
 
 q_threshold      <- 0.25
 coef_threshold   <- 0.5
@@ -968,13 +1199,13 @@ for (ds in names(datasets_grouped_list)) {
   dat <- datasets_grouped_list[[ds]]
   
   if (is.null(dat) || nrow(dat) < 3) {
-    cat(sprintf("  %s: <3 amostras, pulando\n\n", ds))
-    next
+    cat(sprintf("  %s: <3 amostras, pulando\n\n", ds)); next
   }
   
   dtype <- data_type_info[[ds]]
-  fc <- setdiff(names(dat), meta_cols_internal)
-  mf <- as.data.frame(lapply(dat[, fc], function(x) as.numeric(as.character(x))))
+  fc    <- setdiff(names(dat), meta_cols_internal)
+  mf    <- as.data.frame(lapply(dat[, fc],
+                                function(x) as.numeric(as.character(x))))
   mf[is.na(mf)] <- 0
   rownames(mf) <- dat[[sample_id_col_name]]
   mf <- mf[, colSums(mf) > 0, drop = FALSE]
@@ -995,11 +1226,15 @@ for (ds in names(datasets_grouped_list)) {
   
   set.seed(42)
   fit <- tryCatch(
-    Maaslin2(input_data = mf, input_metadata = mm, output = mod,
-             fixed_effects = "Group", normalization = mn, transform = mt,
-             analysis_method = "LM", min_abundance = 0, min_prevalence = 0,
-             max_significance = 0.25, correction = "BH", standardize = FALSE,
-             plot_heatmap = FALSE, plot_scatter = FALSE, cores = 1),
+    Maaslin2(input_data      = mf, input_metadata  = mm,
+             output          = mod, fixed_effects   = "Group",
+             normalization   = mn, transform        = mt,
+             analysis_method = "LM",
+             min_abundance   = 0,  min_prevalence   = 0,
+             max_significance = 0.25, correction    = "BH",
+             standardize     = FALSE,
+             plot_heatmap    = FALSE, plot_scatter   = FALSE,
+             cores           = 1),
     error = function(e) { cat(paste("  ERRO:", e$message, "\n")); NULL }
   )
   if (is.null(fit)) { cat("  Pulando.\n\n"); next }
@@ -1014,37 +1249,50 @@ for (ds in names(datasets_grouped_list)) {
   mr$neg_log10_p   <- -log10(mr$pval_safe)
   
   mr$Direction <- ifelse(
-    mr$qval < q_threshold & mr$coef > 0, paste("Enriched in", comparison_group),
-    ifelse(mr$qval < q_threshold & mr$coef < 0, paste("Enriched in", ref_group),
-           "Not significant"))
-  mr$Direction_pval <- ifelse(
-    mr$pval < 0.05 & mr$coef > 0, paste("Enriched in", comparison_group),
-    ifelse(mr$pval < 0.05 & mr$coef < 0, paste("Enriched in", ref_group),
+    mr$qval < q_threshold & mr$coef > 0,
+    paste("Enriched in", comparison_group),
+    ifelse(mr$qval < q_threshold & mr$coef < 0,
+           paste("Enriched in", ref_group),
            "Not significant"))
   
-  n25     <- sum(mr$qval < 0.25, na.rm = TRUE)
-  n05q    <- sum(mr$qval < 0.05, na.rm = TRUE)
+  mr$Direction_pval <- ifelse(
+    mr$pval < 0.05 & mr$coef > 0,
+    paste("Enriched in", comparison_group),
+    ifelse(mr$pval < 0.05 & mr$coef < 0,
+           paste("Enriched in", ref_group),
+           "Not significant"))
+  
+  n25     <- sum(mr$qval < 0.25,  na.rm = TRUE)
+  n05q    <- sum(mr$qval < 0.05,  na.rm = TRUE)
   nec     <- sum(mr$qval < q_threshold & mr$coef > 0, na.rm = TRUE)
   ner     <- sum(mr$qval < q_threshold & mr$coef < 0, na.rm = TRUE)
-  n_sig_p <- sum(mr$pval < 0.05, na.rm = TRUE)
-  nec_p   <- sum(mr$pval < 0.05 & mr$coef > 0, na.rm = TRUE)
-  ner_p   <- sum(mr$pval < 0.05 & mr$coef < 0, na.rm = TRUE)
+  n_sig_p <- sum(mr$pval < 0.05,  na.rm = TRUE)
+  nec_p   <- sum(mr$pval < 0.05   & mr$coef > 0, na.rm = TRUE)
+  ner_p   <- sum(mr$pval < 0.05   & mr$coef < 0, na.rm = TRUE)
   
   comp_col <- group_palette[comparison_group]
   ref_col  <- group_palette[ref_group]
   
   mr$Dir5 <- ifelse(
-    mr$qval < q_threshold & mr$coef > 0, paste("Enriched in", comparison_group, "(q)"),
-    ifelse(mr$qval < q_threshold & mr$coef < 0, paste("Enriched in", ref_group, "(q)"),
-           ifelse(mr$pval < 0.05 & mr$coef > 0, paste("Enriched in", comparison_group, "(p only)"),
-                  ifelse(mr$pval < 0.05 & mr$coef < 0, paste("Enriched in", ref_group, "(p only)"),
+    mr$qval < q_threshold & mr$coef > 0,
+    paste("Enriched in", comparison_group, "(q)"),
+    ifelse(mr$qval < q_threshold & mr$coef < 0,
+           paste("Enriched in", ref_group, "(q)"),
+           ifelse(mr$pval < 0.05 & mr$coef > 0,
+                  paste("Enriched in", comparison_group, "(p only)"),
+                  ifelse(mr$pval < 0.05 & mr$coef < 0,
+                         paste("Enriched in", ref_group, "(p only)"),
                          "Not significant"))))
   
   vc5 <- c(
-    setNames(comp_col, paste("Enriched in", comparison_group, "(q)")),
-    setNames(ref_col,  paste("Enriched in", ref_group, "(q)")),
-    setNames(adjustcolor(comp_col, alpha.f = 0.45), paste("Enriched in", comparison_group, "(p only)")),
-    setNames(adjustcolor(ref_col,  alpha.f = 0.45), paste("Enriched in", ref_group, "(p only)")),
+    setNames(comp_col,
+             paste("Enriched in", comparison_group, "(q)")),
+    setNames(ref_col,
+             paste("Enriched in", ref_group, "(q)")),
+    setNames(adjustcolor(comp_col, alpha.f = 0.45),
+             paste("Enriched in", comparison_group, "(p only)")),
+    setNames(adjustcolor(ref_col,  alpha.f = 0.45),
+             paste("Enriched in", ref_group, "(p only)")),
     "Not significant" = "grey78"
   )
   
@@ -1057,8 +1305,8 @@ for (ds in names(datasets_grouped_list)) {
   ))
   mr <- mr[order(mr$Dir5), ]
   
-  sf_q  <- mr[mr$qval < q_threshold, ]
-  tl_q  <- if (nrow(sf_q) > 0) {
+  sf_q <- mr[mr$qval < q_threshold, ]
+  tl_q <- if (nrow(sf_q) > 0) {
     do.call(rbind, lapply(unique(as.character(sf_q$Dir5)), function(d) {
       s2 <- sf_q[sf_q$Dir5 == d, ]
       s2 <- s2[order(s2$qval, -abs(s2$coef)), ]
@@ -1077,56 +1325,69 @@ for (ds in names(datasets_grouped_list)) {
   
   pv <- ggplot(mr, aes(x = coef, y = neg_log10_p, color = Dir5)) +
     geom_point(alpha = 0.7, size = 2) +
-    geom_hline(yintercept = -log10(0.05), linetype = "dashed",
-               color = "#D35400", linewidth = 0.6) +
-    geom_hline(yintercept = -log10(q_threshold), linetype = "dotdash",
-               color = "#2980B9", linewidth = 0.6) +
+    geom_hline(yintercept = -log10(0.05),
+               linetype = "dashed", color = "#D35400", linewidth = 0.6) +
+    geom_hline(yintercept = -log10(q_threshold),
+               linetype = "dotdash", color = "#2980B9", linewidth = 0.6) +
     geom_vline(xintercept = c(-coef_threshold, coef_threshold),
                linetype = "dashed", color = "grey50", linewidth = 0.5) +
     scale_color_manual(values = vc5, drop = FALSE) +
-    annotate("text", x = max(mr$coef, na.rm = TRUE) * 0.98,
-             y = -log10(0.05), label = "p = 0.05",
-             hjust = 1, vjust = -0.5, size = 3.2, color = "#D35400", fontface = "bold") +
-    annotate("text", x = max(mr$coef, na.rm = TRUE) * 0.98,
+    annotate("text",
+             x = max(mr$coef, na.rm = TRUE) * 0.98,
+             y = -log10(0.05),
+             label = "p = 0.05",
+             hjust = 1, vjust = -0.5, size = 3.2,
+             color = "#D35400", fontface = "bold") +
+    annotate("text",
+             x = max(mr$coef, na.rm = TRUE) * 0.98,
              y = -log10(q_threshold),
-             label = sprintf("q = %.2f (FDR)", q_threshold),
-             hjust = 1, vjust = -0.5, size = 3.2, color = "#2980B9", fontface = "bold") +
-    annotate("text", x = min(mr$coef, na.rm = TRUE), y = y_max,
-             label = sprintf("q: n=%d\np: n=%d", ner, ner_p),
-             hjust = 0, vjust = 1, size = 3.5, color = ref_col, fontface = "bold") +
-    annotate("text", x = max(mr$coef, na.rm = TRUE), y = y_max,
-             label = sprintf("q: n=%d\np: n=%d", nec, nec_p),
-             hjust = 1, vjust = 1, size = 3.5, color = comp_col, fontface = "bold") +
-    labs(title = sprintf("DA - %s - MaAsLin2", ds),
-         subtitle = sprintf("%s vs %s | %s | q<%.2f: %d | p<0.05: %d",
-                            comparison_group, ref_group, nl, q_threshold, n25, n_sig_p),
-         x = sprintf("Coefficient\n<- %s | %s ->", ref_group, comparison_group),
-         y = expression(-log[10](p - value)),
+             label  = sprintf("q = %.2f (FDR)", q_threshold),
+             hjust  = 1, vjust = -0.5, size = 3.2,
+             color  = "#2980B9", fontface = "bold") +
+    annotate("text",
+             x = min(mr$coef, na.rm = TRUE), y = y_max,
+             label  = sprintf("q: n=%d\np: n=%d", ner, ner_p),
+             hjust  = 0, vjust = 1, size = 3.5,
+             color  = ref_col, fontface = "bold") +
+    annotate("text",
+             x = max(mr$coef, na.rm = TRUE), y = y_max,
+             label  = sprintf("q: n=%d\np: n=%d", nec, nec_p),
+             hjust  = 1, vjust = 1, size = 3.5,
+             color  = comp_col, fontface = "bold") +
+    labs(title    = sprintf("DA - %s - MaAsLin2", ds),
+         subtitle = sprintf(
+           "%s vs %s | %s | q<%.2f: %d | p<0.05: %d",
+           comparison_group, ref_group, nl, q_threshold, n25, n_sig_p),
+         x     = sprintf("Coefficient\n<- %s | %s ->",
+                         ref_group, comparison_group),
+         y     = expression(-log[10](p - value)),
          color = "Significance") +
-    theme_bw(base_size = 13) +
-    theme(plot.title = element_text(face = "bold"),
-          plot.subtitle = element_text(color = "grey40", size = 9.5),
-          legend.position = "bottom",
-          legend.text = element_text(size = 9)) +
-    guides(color = guide_legend(nrow = 2, override.aes = list(size = 3.5)))
+    theme_pipeline(base_size = 13) +
+    theme(legend.position = "bottom",
+          legend.text     = element_text(size = 9)) +
+    guides(color = guide_legend(nrow = 2,
+                                override.aes = list(size = 3.5)))
   
   if (!is.null(tl_all) && nrow(tl_all) > 0) {
     pv <- pv + geom_text_repel(
-      data = tl_all, aes(label = feature_clean),
-      size = 2.5, max.overlaps = 28, segment.color = "grey50",
-      segment.size = 0.3, box.padding = 0.4, show.legend = FALSE
+      data        = tl_all,
+      aes(label   = feature_clean),
+      size        = 2.5, max.overlaps = 28,
+      segment.color = "grey50", segment.size = 0.3,
+      box.padding = 0.4, show.legend = FALSE
     )
   }
   print(pv)
   
   pb   <- NULL
   ppnl <- NULL
-  tp <- head(mr[mr$qval < q_threshold & mr$coef > 0, ], n_top_bar / 2)
-  tn <- head(mr[mr$qval < q_threshold & mr$coef < 0, ], n_top_bar / 2)
-  tb <- rbind(tn, tp)
+  tp   <- head(mr[mr$qval < q_threshold & mr$coef > 0, ], n_top_bar / 2)
+  tn   <- head(mr[mr$qval < q_threshold & mr$coef < 0, ], n_top_bar / 2)
+  tb   <- rbind(tn, tp)
   
   if (nrow(tb) > 0) {
-    tb$feature_clean <- factor(tb$feature_clean, levels = tb$feature_clean[order(tb$coef)])
+    tb$feature_clean <- factor(tb$feature_clean,
+                               levels = tb$feature_clean[order(tb$coef)])
     
     pb <- ggplot(tb, aes(coef, feature_clean, fill = Direction)) +
       geom_col(alpha = 0.85, width = 0.75) +
@@ -1134,39 +1395,51 @@ for (ds in names(datasets_grouped_list)) {
                     width = 0.3, color = "grey25", orientation = "y") +
       geom_vline(xintercept = 0) +
       scale_fill_manual(values = c(
-        setNames(comp_col, paste("Enriched in", comparison_group)),
-        setNames(ref_col,  paste("Enriched in", ref_group)),
+        setNames(comp_col,
+                 paste("Enriched in", comparison_group)),
+        setNames(ref_col,
+                 paste("Enriched in", ref_group)),
         "Not significant" = "grey72"
       )) +
-      labs(title = sprintf("Top %d DA - %s", nrow(tb), ds),
+      labs(title    = sprintf("Top %d DA - %s", nrow(tb), ds),
            subtitle = sprintf("%s | q<%.2f", nl, q_threshold),
-           x = sprintf("Coef\n<- %s | %s ->", ref_group, comparison_group),
-           y = NULL, fill = NULL) +
-      theme_bw(base_size = 12) +
-      theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+           x    = sprintf("Coef\n<- %s | %s ->",
+                          ref_group, comparison_group),
+           y    = NULL, fill = NULL) +
+      theme_pipeline(base_size = 12) +
+      theme(legend.position = "bottom",
+            axis.text.y     = element_text(size = 8))
     print(pb)
     
-    ppnl <- pv + pb + plot_layout(widths = c(1.4, 1)) +
+    ppnl <- pv + pb +
+      plot_layout(widths = c(1.4, 1)) +
       plot_annotation(title = paste("DA -", ds))
     print(ppnl)
   }
   
   dex <- data.frame(
-    Dataset = ds, Feature = mr$feature_clean,
-    Coefficient = round(mr$coef, 4), SE = round(mr$stderr, 4),
-    p_value = round(mr$pval, 6), q_value = round(mr$qval, 6),
-    Direction_q = mr$Direction, Direction_p = mr$Direction_pval,
-    Normalization = nl, stringsAsFactors = FALSE
+    Dataset     = ds,
+    Feature     = mr$feature_clean,
+    Coefficient = round(mr$coef,    4),
+    SE          = round(mr$stderr,  4),
+    p_value     = round(mr$pval,    6),
+    q_value     = round(mr$qval,    6),
+    Direction_q = mr$Direction,
+    Direction_p = mr$Direction_pval,
+    Normalization = nl,
+    stringsAsFactors = FALSE
   )
-  if ("N" %in% names(mr)) dex$N <- mr$N
+  if ("N"      %in% names(mr)) dex$N          <- mr$N
   if ("N.not.0" %in% names(mr)) dex$N_not_zero <- mr$N.not.0
   
   da_results_all[[ds]] <- dex
   da_stats_all[[ds]] <- data.frame(
-    Dataset = ds, Tested = nrow(mr), Sig_q025 = n25, Sig_q005 = n05q,
-    Sig_p005 = n_sig_p, Enr_comp_q = nec, Enr_ref_q = ner,
-    Enr_comp_p = nec_p, Enr_ref_p = ner_p,
-    Normalization = nl, stringsAsFactors = FALSE
+    Dataset    = ds,       Tested     = nrow(mr),
+    Sig_q025   = n25,      Sig_q005   = n05q,
+    Sig_p005   = n_sig_p,  Enr_comp_q = nec,
+    Enr_ref_q  = ner,      Enr_comp_p = nec_p,
+    Enr_ref_p  = ner_p,    Normalization = nl,
+    stringsAsFactors = FALSE
   )
   da_plots_all[[ds]] <- list(volcano = pv, bar = pb, panel = ppnl)
   cat(paste("  OK:", ds, "\n\n"))
@@ -1177,41 +1450,57 @@ all_da_results <- do.call(rbind, da_results_all)
 all_da_sig_q   <- if (!is.null(all_da_results) && nrow(all_da_results) > 0) {
   all_da_results[all_da_results$q_value < q_threshold, ]
 } else data.frame()
-all_da_sig_p <- if (!is.null(all_da_results) && nrow(all_da_results) > 0) {
+all_da_sig_p   <- if (!is.null(all_da_results) && nrow(all_da_results) > 0) {
   all_da_results[all_da_results$p_value < 0.05, ]
 } else data.frame()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # FASE 12 — EXPORT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-cat("\n", rep("=", 70), "\n=== FASE 12: EXPORT ===\n", rep("=", 70), "\n\n")
+cat("\n", rep("=", 70), "\n=== FASE 12: EXPORT ===\n",
+    rep("=", 70), "\n\n")
 
 for (ds in names(datasets_grouped_list)) {
-  for (sub in c("plots/pca", "plots/alpha_diversity", "plots/beta_diversity",
+  for (sub in c("plots/pca", "plots/alpha_diversity",
+                "plots/beta_diversity",
                 "plots/differential_abundance", "tables")) {
-    dir.create(file.path(output_root, ds, sub), recursive = TRUE, showWarnings = FALSE)
+    dir.create(file.path(output_root, ds, sub),
+               recursive = TRUE, showWarnings = FALSE)
   }
 }
-dir.create(file.path(output_root, "consolidated"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_root, "consolidated"),
+           recursive = TRUE, showWarnings = FALSE)
 
 ec <- list(plots = 0, tables = 0, errors = 0)
 
 add_fmt_sheet <- function(wb, sn, data, hdr_color = "#4472C4") {
   addWorksheet(wb, sn)
-  hs <- createStyle(fontColour = "#FFFFFF", fgFill = hdr_color, fontName = "Calibri",
-                    fontSize = 11, textDecoration = "bold", halign = "center",
-                    valign = "center", border = "TopBottomLeftRight",
-                    borderColour = "#FFFFFF", wrapText = TRUE)
-  bs <- createStyle(fontName = "Calibri", fontSize = 10,
-                    border = "TopBottomLeftRight", borderColour = "#BFBFBF")
-  as2 <- createStyle(fontName = "Calibri", fontSize = 10, fgFill = "#F2F7FF",
-                     border = "TopBottomLeftRight", borderColour = "#BFBFBF")
+  hs <- createStyle(
+    fontColour      = "#FFFFFF", fgFill    = hdr_color,
+    fontName        = "Calibri", fontSize  = 11,
+    textDecoration  = "bold",    halign    = "center",
+    valign          = "center",
+    border          = "TopBottomLeftRight",
+    borderColour    = "#FFFFFF", wrapText  = TRUE
+  )
+  bs <- createStyle(
+    fontName  = "Calibri", fontSize = 10,
+    border    = "TopBottomLeftRight", borderColour = "#BFBFBF"
+  )
+  as2 <- createStyle(
+    fontName  = "Calibri", fontSize = 10, fgFill = "#F2F7FF",
+    border    = "TopBottomLeftRight", borderColour = "#BFBFBF"
+  )
   writeData(wb, sn, data, headerStyle = hs)
   nr <- nrow(data); nc <- ncol(data)
   if (nr > 0) {
-    addStyle(wb, sn, bs, rows = 2:(nr + 1), cols = 1:nc, gridExpand = TRUE)
+    addStyle(wb, sn, bs,  rows = 2:(nr + 1),
+             cols = 1:nc, gridExpand = TRUE)
     er <- seq(3, nr + 1, by = 2)
-    if (length(er) > 0) addStyle(wb, sn, as2, rows = er, cols = 1:nc, gridExpand = TRUE)
+    if (length(er) > 0)
+      addStyle(wb, sn, as2, rows = er,
+               cols = 1:nc, gridExpand = TRUE)
   }
   setColWidths(wb, sn, 1:nc, "auto")
   freezePane(wb, sn, firstRow = TRUE)
@@ -1228,105 +1517,196 @@ sx <- function(expr, label) {
 for (ds in names(datasets_grouped_list)) {
   cat(sprintf("  [%s]\n", ds))
   
-  # PCA
+  # ── PCA ───────────────────────────────────────────────────────────────────
   dp <- file.path(output_root, ds, "plots", "pca")
   if (!is.null(pca_results_grouped[[ds]])) {
     pr <- pca_results_grouped[[ds]]
     if (!is.null(pr$plot_pc12)) {
-      sx({ save_gg(pr$plot_pc12, file.path(dp, "pca_PC1_vs_PC2"), 9, 7)
-        ec$plots <- ec$plots + 1 }, "pca12")
+      sx({
+        save_gg(pr$plot_pc12,
+                file.path(dp, "pca_PC1_vs_PC2"), w = 9, h = 7)
+        ec$plots <- ec$plots + 1
+      }, "pca12")
     }
     if (!is.null(pr$plot_pc13)) {
-      sx({ save_gg(pr$plot_pc13, file.path(dp, "pca_PC1_vs_PC3"), 9, 7)
-        ec$plots <- ec$plots + 1 }, "pca13")
+      sx({
+        save_gg(pr$plot_pc13,
+                file.path(dp, "pca_PC1_vs_PC3"), w = 9, h = 7)
+        ec$plots <- ec$plots + 1
+      }, "pca13")
     }
   }
   
-  # ALPHA
+  # ── ALPHA ─────────────────────────────────────────────────────────────────
   da <- file.path(output_root, ds, "plots", "alpha_diversity")
   if (!is.null(alpha_plots_all[[ds]])) {
     ap <- alpha_plots_all[[ds]]
+    
+    # Padding extra baseado no comprimento dos nomes de features
+    fc_names <- setdiff(names(datasets_grouped_list[[ds]]),
+                        meta_cols_internal)
+    max_name <- if (length(fc_names) > 0) max(nchar(fc_names)) else 20
+    name_pad <- max(0, (max_name - 20) * 0.04)
+    
     for (it in list(
-      list(p = ap$depth,    n = "sequencing_depth",  w = 13, h = 6),
-      list(p = ap$facet,    n = "alpha_all_metrics", w = 12, h = 10),
-      list(p = ap$panel,    n = "alpha_2x2_panel",   w = 14, h = 12),
-      list(p = ap$observed, n = "alpha_observed",     w = 7,  h = 6),
-      list(p = ap$chao1,    n = "alpha_chao1",        w = 7,  h = 6),
-      list(p = ap$shannon,  n = "alpha_shannon",      w = 7,  h = 6),
-      list(p = ap$simpson,  n = "alpha_simpson",      w = 7,  h = 6)
+      list(p = ap$depth,    n = "sequencing_depth",
+           w = 13 + name_pad, h = 6),
+      list(p = ap$facet,    n = "alpha_all_metrics",
+           w = 12,            h = 10),
+      list(p = ap$panel,    n = "alpha_2x2_panel",
+           w = 14,            h = 12),
+      list(p = ap$observed, n = "alpha_observed",
+           w = 7,             h = 6),
+      list(p = ap$chao1,    n = "alpha_chao1",
+           w = 7,             h = 6),
+      list(p = ap$shannon,  n = "alpha_shannon",
+           w = 7,             h = 6),
+      list(p = ap$simpson,  n = "alpha_simpson",
+           w = 7,             h = 6)
     )) {
       if (!is.null(it$p)) {
-        sx({ save_gg(it$p, file.path(da, it$n), it$w, it$h)
-          ec$plots <- ec$plots + 1 }, it$n)
+        sx({
+          save_gg(it$p, file.path(da, it$n), it$w, it$h)
+          ec$plots <- ec$plots + 1
+        }, it$n)
       }
     }
   }
   
-  # BETA
+  # ── BETA ──────────────────────────────────────────────────────────────────
   db <- file.path(output_root, ds, "plots", "beta_diversity")
   if (!is.null(beta_plots_all[[ds]])) {
     bp <- beta_plots_all[[ds]]
+    
+    # PCoA individuais
     if (!is.null(bp$pcoa_plots)) {
       for (dn in names(bp$pcoa_plots)) {
         fn <- gsub("[^a-zA-Z0-9]", "_", dn)
-        sx({ save_gg(bp$pcoa_plots[[dn]], file.path(db, paste0("pcoa_", fn)), 9, 7)
-          ec$plots <- ec$plots + 1 }, paste0("pcoa_", fn))
+        sx({
+          save_gg(bp$pcoa_plots[[dn]],
+                  file.path(db, paste0("pcoa_", fn)), w = 9, h = 7)
+          ec$plots <- ec$plots + 1
+        }, paste0("pcoa_", fn))
       }
     }
+    
+    # PCoA painel
     if (!is.null(bp$pcoa_panel)) {
-      sx({ save_gg(bp$pcoa_panel, file.path(db, "pcoa_panel"), 16, 7)
-        ec$plots <- ec$plots + 1 }, "pcoa_panel")
+      sx({
+        save_gg(bp$pcoa_panel,
+                file.path(db, "pcoa_panel"), w = 16, h = 7)
+        ec$plots <- ec$plots + 1
+      }, "pcoa_panel")
     }
+    
+    # NMDS individuais
     if (!is.null(bp$nmds_plots) && length(bp$nmds_plots) > 0) {
       for (dn in names(bp$nmds_plots)) {
         fn <- gsub("[^a-zA-Z0-9]", "_", dn)
-        sx({ save_gg(bp$nmds_plots[[dn]], file.path(db, paste0("nmds_", fn)), 9, 7)
-          ec$plots <- ec$plots + 1 }, paste0("nmds_", fn))
+        sx({
+          save_gg(bp$nmds_plots[[dn]],
+                  file.path(db, paste0("nmds_", fn)), w = 9, h = 7)
+          ec$plots <- ec$plots + 1
+        }, paste0("nmds_", fn))
       }
     }
+    
+    # NMDS painel
     if (!is.null(bp$nmds_panel)) {
-      sx({ save_gg(bp$nmds_panel, file.path(db, "nmds_panel"), 16, 7)
-        ec$plots <- ec$plots + 1 }, "nmds_panel")
+      sx({
+        save_gg(bp$nmds_panel,
+                file.path(db, "nmds_panel"), w = 16, h = 7)
+        ec$plots <- ec$plots + 1
+      }, "nmds_panel")
     }
+    
+    # ── Heatmap: dimensões calculadas a partir da matriz guardada ──────────
     if (!is.null(bp$heatmap)) {
       sx({
-        png(file.path(db, "heatmap_top_features.png"),
-            width = 14, height = 12, units = "in", res = 300, bg = "white")
-        draw(bp$heatmap, merge_legend = TRUE)
+        # Usa a matriz guardada para calcular dimensões precisas
+        ht_mat  <- if (!is.null(bp$heatmap_mat)) bp$heatmap_mat else {
+          # fallback: tenta extrair do objeto Heatmap
+          tryCatch(bp$heatmap@matrix, error = function(e) NULL)
+        }
+        
+        if (!is.null(ht_mat)) {
+          ht_dims <- calc_heatmap_dims(ht_mat)
+        } else {
+          # fallback conservador
+          ht_dims <- list(width = 18, height = 16)
+        }
+        
+        png(
+          filename = file.path(db, "heatmap_top_features.png"),
+          width    = ht_dims$width,
+          height   = ht_dims$height,
+          units    = "in",
+          res      = 300,
+          bg       = "white"
+        )
+        draw(
+          bp$heatmap,
+          merge_legend = TRUE,
+          padding      = unit(c(8, 8, 8, 8), "mm"),
+          auto_adjust  = TRUE
+        )
         dev.off()
-        cat("    Salvo: heatmap_top_features.png\n")
+        cat(sprintf(
+          "    Salvo: heatmap_top_features.png  [%.1f x %.1f in | 300 dpi]\n",
+          ht_dims$width, ht_dims$height
+        ))
         ec$plots <- ec$plots + 1
       }, "heatmap")
     }
   }
   
-  # DA
+  # ── DA ────────────────────────────────────────────────────────────────────
   dd <- file.path(output_root, ds, "plots", "differential_abundance")
   if (!is.null(da_plots_all[[ds]])) {
     dap <- da_plots_all[[ds]]
+    
+    # Padding baseado no comprimento das features no barplot
+    if (!is.null(da_results_all[[ds]])) {
+      max_feat <- max(nchar(da_results_all[[ds]]$Feature), na.rm = TRUE)
+      feat_pad <- max(0, (max_feat - 30) * 0.05)
+    } else {
+      feat_pad <- 0
+    }
+    
     for (it in list(
-      list(p = dap$volcano, n = "volcano_q_and_p",       w = 12, h = 10),
-      list(p = dap$bar,     n = "barplot_top_da",         w = 10, h = 9),
-      list(p = dap$panel,   n = "da_volcano_bar_panel",   w = 20, h = 10)
+      list(p = dap$volcano, n = "volcano_q_and_p",
+           w = 12,              h = 10),
+      list(p = dap$bar,     n = "barplot_top_da",
+           w = 10 + feat_pad,   h = 9 + feat_pad * 0.3),
+      list(p = dap$panel,   n = "da_volcano_bar_panel",
+           w = 20 + feat_pad,   h = 10)
     )) {
       if (!is.null(it$p)) {
-        sx({ save_gg(it$p, file.path(dd, it$n), it$w, it$h)
-          ec$plots <- ec$plots + 1 }, it$n)
+        sx({
+          save_gg(it$p, file.path(dd, it$n), it$w, it$h)
+          ec$plots <- ec$plots + 1
+        }, it$n)
       }
     }
   }
   
-  # TABELAS
+  # ── TABELAS ───────────────────────────────────────────────────────────────
   td <- file.path(output_root, ds, "tables")
   
   if (!is.null(alpha_stats_all[[ds]])) {
     sx({
       wa <- createWorkbook()
-      add_fmt_sheet(wa, "Descriptive",    alpha_stats_all[[ds]]$descriptive,    "#2E75B6")
-      add_fmt_sheet(wa, "Kruskal_Wallis", alpha_stats_all[[ds]]$kruskal_wallis, "#2E75B6")
-      add_fmt_sheet(wa, "Wilcoxon",       alpha_stats_all[[ds]]$wilcoxon,       "#2E75B6")
-      add_fmt_sheet(wa, "Per_Sample",     alpha_results_all[[ds]],              "#2E75B6")
-      saveWorkbook(wa, file.path(td, paste0(ds, "_alpha_diversity.xlsx")), overwrite = TRUE)
+      add_fmt_sheet(wa, "Descriptive",
+                    alpha_stats_all[[ds]]$descriptive,    "#2E75B6")
+      add_fmt_sheet(wa, "Kruskal_Wallis",
+                    alpha_stats_all[[ds]]$kruskal_wallis, "#2E75B6")
+      add_fmt_sheet(wa, "Wilcoxon",
+                    alpha_stats_all[[ds]]$wilcoxon,       "#2E75B6")
+      add_fmt_sheet(wa, "Per_Sample",
+                    alpha_results_all[[ds]],              "#2E75B6")
+      saveWorkbook(wa,
+                   file.path(td, paste0(ds, "_alpha_diversity.xlsx")),
+                   overwrite = TRUE)
       cat(paste("    ", ds, "_alpha.xlsx\n"))
       ec$tables <- ec$tables + 1
     }, "alpha_xlsx")
@@ -1335,11 +1715,17 @@ for (ds in names(datasets_grouped_list)) {
   if (!is.null(beta_stats_all[[ds]])) {
     sx({
       wb <- createWorkbook()
-      add_fmt_sheet(wb, "PERMANOVA",   beta_stats_all[[ds]]$permanova,   "#375623")
-      add_fmt_sheet(wb, "ANOSIM",      beta_stats_all[[ds]]$anosim,      "#375623")
-      add_fmt_sheet(wb, "Betadisper",  beta_stats_all[[ds]]$betadisper,  "#375623")
-      add_fmt_sheet(wb, "NMDS_Stress", beta_stats_all[[ds]]$nmds_stress, "#375623")
-      saveWorkbook(wb, file.path(td, paste0(ds, "_beta_diversity.xlsx")), overwrite = TRUE)
+      add_fmt_sheet(wb, "PERMANOVA",
+                    beta_stats_all[[ds]]$permanova,   "#375623")
+      add_fmt_sheet(wb, "ANOSIM",
+                    beta_stats_all[[ds]]$anosim,      "#375623")
+      add_fmt_sheet(wb, "Betadisper",
+                    beta_stats_all[[ds]]$betadisper,  "#375623")
+      add_fmt_sheet(wb, "NMDS_Stress",
+                    beta_stats_all[[ds]]$nmds_stress, "#375623")
+      saveWorkbook(wb,
+                   file.path(td, paste0(ds, "_beta_diversity.xlsx")),
+                   overwrite = TRUE)
       cat(paste("    ", ds, "_beta.xlsx\n"))
       ec$tables <- ec$tables + 1
     }, "beta_xlsx")
@@ -1348,13 +1734,19 @@ for (ds in names(datasets_grouped_list)) {
   if (!is.null(da_results_all[[ds]])) {
     sx({
       wd <- createWorkbook()
-      add_fmt_sheet(wd, "All_Results", da_results_all[[ds]], "#833C00")
+      add_fmt_sheet(wd, "All_Results",
+                    da_results_all[[ds]], "#833C00")
       sq <- da_results_all[[ds]][da_results_all[[ds]]$q_value < q_threshold, ]
-      if (nrow(sq) > 0) add_fmt_sheet(wd, "Significant_q", sq, "#833C00")
+      if (nrow(sq) > 0)
+        add_fmt_sheet(wd, "Significant_q", sq, "#833C00")
       sp <- da_results_all[[ds]][da_results_all[[ds]]$p_value < 0.05, ]
-      if (nrow(sp) > 0) add_fmt_sheet(wd, "Significant_p", sp, "#833C00")
-      add_fmt_sheet(wd, "Summary", da_stats_all[[ds]], "#833C00")
-      saveWorkbook(wd, file.path(td, paste0(ds, "_differential_abundance.xlsx")), overwrite = TRUE)
+      if (nrow(sp) > 0)
+        add_fmt_sheet(wd, "Significant_p", sp, "#833C00")
+      add_fmt_sheet(wd, "Summary",
+                    da_stats_all[[ds]], "#833C00")
+      saveWorkbook(wd,
+                   file.path(td, paste0(ds, "_differential_abundance.xlsx")),
+                   overwrite = TRUE)
       cat(paste("    ", ds, "_da.xlsx\n"))
       ec$tables <- ec$tables + 1
     }, "da_xlsx")
@@ -1363,55 +1755,62 @@ for (ds in names(datasets_grouped_list)) {
   cat("\n")
 }
 
-# MASTER
+# ── MASTER ────────────────────────────────────────────────────────────────────
 cat("=== MASTER ===\n")
 sx({
   wm <- createWorkbook()
-  if (!is.null(all_desc) && nrow(all_desc) > 0)
-    add_fmt_sheet(wm, "Alpha_Descriptive", all_desc, "#2E75B6")
-  if (!is.null(all_kw) && nrow(all_kw) > 0)
-    add_fmt_sheet(wm, "Alpha_KW", all_kw, "#2E75B6")
-  if (!is.null(all_wx) && nrow(all_wx) > 0)
-    add_fmt_sheet(wm, "Alpha_Wilcoxon", all_wx, "#2E75B6")
-  if (!is.null(all_permanova) && nrow(all_permanova) > 0)
-    add_fmt_sheet(wm, "Beta_PERMANOVA", all_permanova, "#375623")
-  if (!is.null(all_anosim) && nrow(all_anosim) > 0)
-    add_fmt_sheet(wm, "Beta_ANOSIM", all_anosim, "#375623")
-  if (!is.null(all_betadisp) && nrow(all_betadisp) > 0)
-    add_fmt_sheet(wm, "Beta_Betadisper", all_betadisp, "#375623")
-  if (!is.null(all_nmds_str) && nrow(all_nmds_str) > 0)
-    add_fmt_sheet(wm, "Beta_NMDS", all_nmds_str, "#375623")
+  if (!is.null(all_desc)       && nrow(all_desc)       > 0)
+    add_fmt_sheet(wm, "Alpha_Descriptive", all_desc,       "#2E75B6")
+  if (!is.null(all_kw)         && nrow(all_kw)         > 0)
+    add_fmt_sheet(wm, "Alpha_KW",          all_kw,         "#2E75B6")
+  if (!is.null(all_wx)         && nrow(all_wx)         > 0)
+    add_fmt_sheet(wm, "Alpha_Wilcoxon",    all_wx,         "#2E75B6")
+  if (!is.null(all_permanova)  && nrow(all_permanova)  > 0)
+    add_fmt_sheet(wm, "Beta_PERMANOVA",    all_permanova,  "#375623")
+  if (!is.null(all_anosim)     && nrow(all_anosim)     > 0)
+    add_fmt_sheet(wm, "Beta_ANOSIM",       all_anosim,     "#375623")
+  if (!is.null(all_betadisp)   && nrow(all_betadisp)   > 0)
+    add_fmt_sheet(wm, "Beta_Betadisper",   all_betadisp,   "#375623")
+  if (!is.null(all_nmds_str)   && nrow(all_nmds_str)   > 0)
+    add_fmt_sheet(wm, "Beta_NMDS",         all_nmds_str,   "#375623")
   if (exists("variance_summary") && !is.null(variance_summary))
-    add_fmt_sheet(wm, "PCA_Variance", variance_summary, "#7030A0")
+    add_fmt_sheet(wm, "PCA_Variance",      variance_summary, "#7030A0")
   ri2 <- do.call(rbind, rarefaction_info_all)
   if (!is.null(ri2) && nrow(ri2) > 0)
-    add_fmt_sheet(wm, "Rarefaction", ri2, "#7030A0")
-  if (!is.null(all_da_stats) && nrow(all_da_stats) > 0)
-    add_fmt_sheet(wm, "DA_Summary", all_da_stats, "#833C00")
-  if (!is.null(all_da_sig_q) && nrow(all_da_sig_q) > 0)
-    add_fmt_sheet(wm, "DA_Sig_q", all_da_sig_q, "#833C00")
-  if (!is.null(all_da_sig_p) && nrow(all_da_sig_p) > 0)
-    add_fmt_sheet(wm, "DA_Sig_p", all_da_sig_p, "#833C00")
+    add_fmt_sheet(wm, "Rarefaction",       ri2,            "#7030A0")
+  if (!is.null(all_da_stats)   && nrow(all_da_stats)   > 0)
+    add_fmt_sheet(wm, "DA_Summary",        all_da_stats,   "#833C00")
+  if (!is.null(all_da_sig_q)   && nrow(all_da_sig_q)   > 0)
+    add_fmt_sheet(wm, "DA_Sig_q",          all_da_sig_q,   "#833C00")
+  if (!is.null(all_da_sig_p)   && nrow(all_da_sig_p)   > 0)
+    add_fmt_sheet(wm, "DA_Sig_p",          all_da_sig_p,   "#833C00")
   if (!is.null(all_da_results) && nrow(all_da_results) > 0)
-    add_fmt_sheet(wm, "DA_All", all_da_results, "#833C00")
-  saveWorkbook(wm, file.path(output_root, "consolidated", "MASTER.xlsx"), overwrite = TRUE)
+    add_fmt_sheet(wm, "DA_All",            all_da_results, "#833C00")
+  saveWorkbook(wm,
+               file.path(output_root, "consolidated", "MASTER.xlsx"),
+               overwrite = TRUE)
   cat("  MASTER.xlsx\n")
   ec$tables <- ec$tables + 1
 }, "master")
 
-# SESSION
+# ── SESSION INFO ──────────────────────────────────────────────────────────────
 tryCatch({
   sink(file.path(output_root, "session_info.txt"))
-  cat(sprintf("Generated: %s\nDir: %s\nGroups: %s\nAges: %s\nDatasets: %s\n\n",
-              format(Sys.time()), data_dir,
-              paste(selected_groups, collapse = ", "),
-              ifelse(is.null(selected_ages), "ALL", paste(selected_ages, collapse = ", ")),
-              paste(names(datasets_grouped_list), collapse = ", ")))
+  cat(sprintf(
+    "Generated: %s\nDir: %s\nGroups: %s\nAges: %s\nDatasets: %s\n\n",
+    format(Sys.time()), data_dir,
+    paste(selected_groups, collapse = ", "),
+    ifelse(is.null(selected_ages), "ALL",
+           paste(selected_ages, collapse = ", ")),
+    paste(names(datasets_grouped_list), collapse = ", ")))
   print(sessionInfo())
   sink()
 }, error = function(e) tryCatch(sink(), error = function(e2) NULL))
 
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUDITORIA
+# ═══════════════════════════════════════════════════════════════════════════════
+
 cat("\n", rep("=", 70), "\n  AUDITORIA\n", rep("=", 70), "\n\n")
 
 expected <- c(
@@ -1422,12 +1821,13 @@ expected <- c(
   "nmds_Bray_Curtis", "nmds_Jaccard", "nmds_panel",
   "heatmap_top_features",
   "volcano_q_and_p", "barplot_top_da", "da_volcano_bar_panel",
-  "_alpha_diversity.xlsx", "_beta_diversity.xlsx", "_differential_abundance.xlsx"
+  "_alpha_diversity.xlsx", "_beta_diversity.xlsx",
+  "_differential_abundance.xlsx"
 )
 
 for (ds in names(datasets_grouped_list)) {
   af   <- list.files(file.path(output_root, ds), recursive = TRUE)
-  npng <- sum(grepl("\\.png$", af))
+  npng <- sum(grepl("\\.png$",  af))
   nxl  <- sum(grepl("\\.xlsx$", af))
   cat(sprintf("  [%s] %d PNG + %d XLSX\n", ds, npng, nxl))
   for (exp in expected) {
@@ -1440,4 +1840,5 @@ for (ds in names(datasets_grouped_list)) {
 cat(sprintf("  TOTAIS: %d plots | %d tabelas | %d erros\n",
             ec$plots, ec$tables, ec$errors))
 cat(rep("=", 70), "\n  PIPELINE COMPLETO!\n", rep("=", 70), "\n")
+
 rm(list = ls())
